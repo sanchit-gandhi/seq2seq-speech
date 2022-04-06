@@ -24,13 +24,12 @@ from flax.core.frozen_dict import FrozenDict, unfreeze
 from jax import lax
 from jax.random import PRNGKey
 
-from ...modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutputWithCrossAttentions, FlaxSeq2SeqLMOutput
-from ...modeling_flax_utils import FlaxPreTrainedModel
-from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
-from ..auto.configuration_auto import AutoConfig
-from ..auto.modeling_flax_auto import FlaxAutoModel, FlaxAutoModelForCausalLM
-from .configuration_speech_encoder_decoder import SpeechEncoderDecoderConfig
-
+from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutputWithCrossAttentions, FlaxSeq2SeqLMOutput
+from transformers.modeling_flax_utils import FlaxPreTrainedModel
+from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
+from transformers import AutoConfig, SpeechEncoderDecoderConfig
+from models.modeling_flax_wav2vec2 import FlaxWav2Vec2Model, FlaxWav2Vec2Module
+from models.modeling_flax_bart import FlaxBartForCausalLM, FlaxBartForCausalLMModule
 
 logger = logging.get_logger(__name__)
 
@@ -204,11 +203,9 @@ class FlaxSpeechEncoderDecoderModule(nn.Module):
         encoder_config = self.config.encoder
         decoder_config = self.config.decoder
 
-        # Copied from `modeling_hybrid_clip.py` with modifications.
-        from ...models.auto.modeling_flax_auto import FLAX_MODEL_FOR_CAUSAL_LM_MAPPING, FLAX_MODEL_MAPPING
-
-        encoder_module = FLAX_MODEL_MAPPING[encoder_config.__class__].module_class
-        decoder_module = FLAX_MODEL_FOR_CAUSAL_LM_MAPPING[decoder_config.__class__].module_class
+        # TODO: configure FlaxAutoModel mappings (required when trialling different encoder-decoder combinations)
+        encoder_module = FlaxWav2Vec2Module
+        decoder_module = FlaxBartForCausalLMModule
 
         self.encoder = encoder_module(encoder_config, dtype=self.dtype)
         self.decoder = decoder_module(decoder_config, dtype=self.dtype)
@@ -849,7 +846,8 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
 
                 kwargs_encoder["config"] = encoder_config
 
-            encoder = FlaxAutoModel.from_pretrained(
+            # TODO: FlaxAutoModel .from_pretrained
+            encoder = FlaxWav2Vec2Model.from_pretrained(
                 encoder_pretrained_model_name_or_path, *model_args, **kwargs_encoder
             )
 
@@ -886,7 +884,8 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
                     "`decoder_config` to `.from_encoder_decoder_pretrained(...)`"
                 )
 
-            decoder = FlaxAutoModelForCausalLM.from_pretrained(decoder_pretrained_model_name_or_path, **kwargs_decoder)
+            # TODO: FlaxAutoModelForCausalLM .from_pretrained
+            decoder = FlaxBartForCausalLM.from_pretrained(decoder_pretrained_model_name_or_path, **kwargs_decoder)
 
         # instantiate config with corresponding kwargs
         dtype = kwargs.pop("dtype", jnp.float32)
