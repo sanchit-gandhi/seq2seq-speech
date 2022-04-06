@@ -40,13 +40,13 @@ import wandb as wandb
 from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
+
 from huggingface_hub import Repository
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
     AutoProcessor,
     AutoTokenizer,
-    FlaxAutoModelForSpeechSeq2Seq,
     HfArgumentParser,
     Seq2SeqTrainingArguments,
     is_tensorboard_available,
@@ -56,6 +56,7 @@ from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from models.modeling_flax_speech_encoder_decoder import FlaxSpeechEncoderDecoderModel
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
@@ -698,7 +699,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    model = FlaxAutoModelForSpeechSeq2Seq.from_pretrained(
+    model = FlaxSpeechEncoderDecoderModel.from_pretrained(
         model_args.model_name_or_path,
         config=config,
         dtype=jnp.bfloat16 if training_args.mixed_precision else jnp.float32,
