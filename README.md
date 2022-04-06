@@ -20,7 +20,7 @@ encoder_id = "facebook/wav2vec2-large-lv60"
 decoder_id = "facebook/bart-large"
 
 model = FlaxSpeechEncoderDecoderModel.from_encoder_decoder_pretrained(
-    encoder_id, decoder_id, encoder_add_adapter=True)
+    encoder_id, decoder_id, encoder_add_adapter=True, decoder_from_pt=True)
 
 model.config.decoder_start_token_id = model.config.decoder.bos_token_id
 model.config.pad_token_id = model.config.decoder.pad_token_id
