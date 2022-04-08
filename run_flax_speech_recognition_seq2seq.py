@@ -40,8 +40,8 @@ import wandb as wandb
 from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
-
 from huggingface_hub import Repository
+from optax._src import linear_algebra
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
@@ -107,8 +107,12 @@ class ModelArguments:
         default=True, metadata={"help": "Whether to freeze the feature encoder layers of the model."}
     )
     hidden_dropout: float = field(
-        default=0.1, metadata={"help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."}
+        default=0.1,
+        metadata={
+            "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
+        },
     )
+
 
 @flax.struct.dataclass
 class DataTrainingArguments:
@@ -301,6 +305,7 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
     tx: optax.GradientTransformation = struct.field(pytree_node=False)
     opt_state: optax.OptState
     dropout_rng: jnp.ndarray
+    max_grad_norm: Optional[float] = 1.0
 
     def apply_gradients(self, *, grads, to_dtype, **kwargs):
         """Updates `step`, `params`, `opt_state` and `**kwargs` in return value.
@@ -317,6 +322,13 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
           and `opt_state` updated by applying `grads`, and additional attributes
           replaced as specified by `kwargs`.
         """
+
+        # clip gradients by global l2 norm
+        casted_max_grad_norm = to_dtype(self.max_grad_norm)
+        g_norm = linear_algebra.global_norm(grads)
+        g_norm = jnp.maximum(casted_max_grad_norm, g_norm)
+        grads = jax.tree_map(lambda t: (t / g_norm) * casted_max_grad_norm, grads)
+
         # downcast params to bf16 to match dtype of grads and optimizer state if mixed-precision training
         updates, new_opt_state = self.tx.update(grads, self.opt_state, to_dtype(self.params))
 
@@ -614,10 +626,10 @@ def main():
         wandb.config = {
             "learning_rate": training_args.learning_rate,
             "warmup_steps": training_args.warmup_steps,
-            "batch_size": training_args.per_device_train_batch_size,
+            "per_device_batch_size": training_args.per_device_train_batch_size,
             "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
             "num_epochs": training_args.num_train_epochs,
-            "dtype": "bfloat16" if training_args.mixed_precision else "float32",
+            "mixed_precision": training_args.mixed_precision,
             "matmul_precision": training_args.matmul_precision,
         }
 
@@ -866,14 +878,14 @@ def main():
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
     num_train_samples = len(vectorized_datasets["train"])
-    steps_per_epoch = num_train_samples // train_batch_size
+    steps_per_epoch = num_train_samples // batch_size_per_update
     total_train_steps = steps_per_epoch * num_epochs
     to_dtype = to_bf16 if training_args.mixed_precision else to_fp32
 
     # Create learning rate schedule
     linear_decay_lr_schedule_fn = create_learning_rate_fn(
         len(vectorized_datasets["train"]),
-        train_batch_size,
+        batch_size_per_update,
         training_args.num_train_epochs,
         training_args.warmup_steps,
         training_args.learning_rate,
@@ -896,7 +908,7 @@ def main():
         return traverse_util.unflatten_dict(flat_mask)
 
     # Create adam optimizer
-    adamw = optax.adamw(
+    optim = optax.adamw(
         learning_rate=linear_decay_lr_schedule_fn,
         b1=training_args.adam_beta1,
         b2=training_args.adam_beta2,
@@ -905,10 +917,7 @@ def main():
         mask=decay_mask_fn,
     )
 
-    # Augment the optimizer to facilitate gradient clipping by global norm
-    optim = optax.chain(optax.clip_by_global_norm(training_args.max_grad_norm), adamw)
-
-    # Optax MultiSteps for gradient accumulation. For the time being, we'll only call this optimizer transformation if gradient accumulation is required (i.e. gradient accumulation steps > 1)
+    # Optax MultiSteps for gradient accumulation. We'll only call this optimizer transformation if gradient accumulation is required (i.e. gradient accumulation steps > 1)
     if training_args.multisteps and gradient_accumulation_steps > 1:
         optim = optax.MultiSteps(optim, gradient_accumulation_steps, use_grad_mean=False)
 
@@ -919,6 +928,7 @@ def main():
         tx=optim,
         to_dtype=to_dtype,
         dropout_rng=dropout_rng,
+        max_grad_norm=training_args.max_grad_norm,
     )
 
     # Cross entropy loss
@@ -975,7 +985,7 @@ def main():
                 return jax.tree_map(jnp.add, (accum_loss, accum_labels, accum_grad), (loss, num_labels, grad))
 
             # create an initial state for accumulating losses, num labels and gradients
-            init_loss_labels_grad = (0, 0, jax.tree_map(jnp.zeros_like, state.params))
+            init_loss_labels_grad = (0, 0, jax.tree_map(jnp.zeros_like, to_dtype(state.params)))
             # loop accum minibatch step over the number of gradient accumulation steps
             loss, num_labels, grad = jax.lax.fori_loop(
                 0,
@@ -1017,6 +1027,7 @@ def main():
         metrics.update(logs)
 
         metrics = jax.lax.pmean(metrics, axis_name="batch")
+        # metrics = to_fp32(metrics)
 
         return new_state, metrics
 
@@ -1033,6 +1044,7 @@ def main():
         # summarize metrics
         metrics = {"loss": loss}
         metrics = jax.lax.pmean(metrics, axis_name="batch")
+        # metrics = to_fp32(metrics)
         return metrics
 
     # Define generation function
@@ -1079,7 +1091,7 @@ def main():
             batch = shard(batch.data)
             state, train_metric = p_train_step(state, batch)
 
-            cur_step = epoch * (num_train_samples // train_batch_size) + step
+            cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
             if cur_step % training_args.logging_steps == 0 and cur_step > 0:
                 # Save metrics
