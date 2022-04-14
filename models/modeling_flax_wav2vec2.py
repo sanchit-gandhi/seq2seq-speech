@@ -652,11 +652,13 @@ class FlaxWav2Vec2PreTrainedModel(FlaxPreTrainedModel):
         input_values,
         attention_mask=None,
         mask_time_indices=None,
+        extract_features=None,
         params: dict = None,
         dropout_rng: jax.random.PRNGKey = None,
         train: bool = False,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_features: Optional[bool] = None,
         freeze_feature_encoder: bool = False,
         return_dict: Optional[bool] = None,
     ):
@@ -666,10 +668,12 @@ class FlaxWav2Vec2PreTrainedModel(FlaxPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.return_dict
 
-        batch_size, sequence_length = input_values.shape
-
         if attention_mask is None:
+            batch_size, sequence_length = input_values.shape
             attention_mask = jnp.ones((batch_size, sequence_length))
+
+        if extract_features is not None:
+            extract_features = jnp.array(extract_features, dtype="f4")
 
         # Handle any PRNG if needed
         rngs = {}
@@ -683,9 +687,11 @@ class FlaxWav2Vec2PreTrainedModel(FlaxPreTrainedModel):
             jnp.array(input_values, dtype="f4"),
             jnp.array(attention_mask, dtype="i4"),
             mask_time_indices,
+            extract_features,
             not train,
             output_attentions,
             output_hidden_states,
+            output_features,
             freeze_feature_encoder,
             return_dict,
             rngs=rngs,
@@ -720,13 +726,21 @@ class FlaxWav2Vec2Module(nn.Module):
         input_values,
         attention_mask=None,
         mask_time_indices=None,
+        extract_features=None,
         deterministic=True,
         output_attentions=None,
         output_hidden_states=None,
+        output_features=False,
         freeze_feature_encoder=False,
         return_dict=None,
     ):
-        extract_features = self.feature_extractor(input_values, freeze_feature_encoder=freeze_feature_encoder)
+
+        # forward pass through the feature extractor if features not specified
+        if extract_features is None:
+            extract_features = self.feature_extractor(input_values, freeze_feature_encoder=freeze_feature_encoder)
+
+        if output_features:
+            return extract_features
 
         # make sure that no loss is computed on padded inputs
         if attention_mask is not None:
