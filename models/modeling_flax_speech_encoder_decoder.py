@@ -263,8 +263,10 @@ class FlaxSpeechEncoderDecoderModule(nn.Module):
         decoder_attention_mask,
         decoder_position_ids,
         encoder_outputs=None,
+        extract_features=None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        output_features: bool = False,
         return_dict: bool = True,
         deterministic: bool = True,
         freeze_feature_encoder: bool = False,
@@ -273,12 +275,17 @@ class FlaxSpeechEncoderDecoderModule(nn.Module):
             encoder_outputs = self.encoder(
                 inputs,
                 attention_mask=attention_mask,
+                extract_features=extract_features,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
+                output_features=output_features,
                 return_dict=return_dict,
                 deterministic=deterministic,
                 freeze_feature_encoder=freeze_feature_encoder,
             )
+
+        if output_features:
+            return encoder_outputs
 
         encoder_hidden_states = encoder_outputs[0]
 
@@ -448,8 +455,10 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
         self,
         inputs: jnp.ndarray,
         attention_mask: Optional[jnp.ndarray] = None,
+        extract_features: Optional[jnp.ndarray] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_features: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         train: bool = False,
         freeze_feature_encoder: bool = False,
@@ -481,6 +490,9 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
         if attention_mask is None:
             attention_mask = jnp.ones_like(inputs, dtype="i4")
 
+        if extract_features is not None:
+            extract_features = jnp.array(extract_features, dtype="f4")
+
         # Handle any PRNG if needed
         rngs = {}
         if dropout_rng is not None:
@@ -494,8 +506,10 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
             {"params": params or self.params},
             inputs=jnp.array(inputs, dtype="f4"),
             attention_mask=jnp.array(attention_mask, dtype="i4"),
+            extract_features=extract_features,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_features=output_features,
             return_dict=return_dict,
             deterministic=not train,
             freeze_feature_encoder=freeze_feature_encoder,
@@ -503,7 +517,7 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
             method=_encoder_forward,
         )
 
-        if return_dict:
+        if return_dict and not output_features:
             outputs = FlaxBaseModelOutput(
                 last_hidden_state=outputs.last_hidden_state,
                 hidden_states=outputs.hidden_states,
@@ -643,11 +657,13 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
         self,
         inputs: jnp.ndarray,
         attention_mask: Optional[jnp.ndarray] = None,
+        extract_features: Optional[jnp.ndarray] = None,
         decoder_input_ids: Optional[jnp.ndarray] = None,
         decoder_attention_mask: Optional[jnp.ndarray] = None,
         decoder_position_ids: Optional[jnp.ndarray] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_features: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         train: bool = False,
         freeze_feature_encoder: bool = False,
@@ -689,6 +705,12 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
         if attention_mask is None:
             attention_mask = jnp.ones_like(inputs, dtype="i4")
 
+        if extract_features is not None:
+            inputs = None  # we can omit passing the inputs to the model to save memory
+            extract_features = jnp.array(extract_features, dtype="f4")
+        else:
+            inputs = jnp.array(inputs, dtype="f4")
+
         # prepare decoder inputs
         if decoder_input_ids is None:
             raise ValueError(
@@ -707,13 +729,15 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
 
         return self.module.apply(
             {"params": params or self.params},
-            inputs=jnp.array(inputs, dtype="f4"),
+            inputs=inputs,
             attention_mask=jnp.array(attention_mask, dtype="i4"),
+            extract_features=extract_features,
             decoder_input_ids=jnp.array(decoder_input_ids, dtype="i4"),
             decoder_attention_mask=jnp.array(decoder_attention_mask, dtype="i4"),
             decoder_position_ids=jnp.array(decoder_position_ids, dtype="i4"),
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_features=output_features,
             return_dict=return_dict,
             deterministic=not train,
             freeze_feature_encoder=freeze_feature_encoder,
