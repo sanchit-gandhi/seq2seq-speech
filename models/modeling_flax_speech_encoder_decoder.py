@@ -706,7 +706,10 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
             attention_mask = jnp.ones_like(inputs, dtype="i4")
 
         if extract_features is not None:
+            inputs = None  # we can omit passing the inputs to the model to save memory
             extract_features = jnp.array(extract_features, dtype="f4")
+        else:
+            inputs = jnp.array(inputs, dtype="f4")
 
         # prepare decoder inputs
         if decoder_input_ids is None:
@@ -726,7 +729,7 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
 
         return self.module.apply(
             {"params": params or self.params},
-            inputs=jnp.array(inputs, dtype="f4"),
+            inputs=inputs,
             attention_mask=jnp.array(attention_mask, dtype="i4"),
             extract_features=extract_features,
             decoder_input_ids=jnp.array(decoder_input_ids, dtype="i4"),
