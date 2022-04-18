@@ -41,6 +41,7 @@ from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from huggingface_hub import Repository
+from models.modeling_flax_speech_encoder_decoder import FlaxSpeechEncoderDecoderModel
 from optax._src import linear_algebra
 from transformers import (
     AutoConfig,
@@ -56,7 +57,6 @@ from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from models.modeling_flax_speech_encoder_decoder import FlaxSpeechEncoderDecoderModel
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
@@ -973,33 +973,25 @@ def main():
         else:
             # add a first dimension over gradient_accumulation_steps for minibatch slices
             batch = jax.tree_map(
-                lambda x: x.reshape(gradient_accumulation_steps, training_args.per_device_train_batch_size, -1), batch
+                lambda x: x.reshape(
+                    gradient_accumulation_steps, training_args.per_device_train_batch_size, *x.shape[1::]
+                ),
+                batch,
             )
 
-            def accum_minibatch_step(grad_idx, accum_loss_labels_grad):
-                accum_loss, accum_labels, accum_grad = accum_loss_labels_grad
-                # get a minibatch (one gradient accumulation slice)
-                minibatch = jax.tree_map(
-                    lambda x: jax.lax.dynamic_index_in_dim(x, grad_idx, keepdims=False),
-                    batch,
-                )
+            def accum_minibatch_step(accum_grad, minibatch):
                 # compute loss, num labels and grad over minibatch and accumulate
                 (loss, num_labels), grad = grad_fn(to_dtype(state.params), minibatch)
-                return jax.tree_map(jnp.add, (accum_loss, accum_labels, accum_grad), (loss, num_labels, grad))
+                return jax.tree_map(jnp.add, accum_grad, grad), (loss, num_labels)
 
             # create an initial state for accumulating losses, num labels and gradients
-            init_loss_labels_grad = (0, 0, jax.tree_map(jnp.zeros_like, to_dtype(state.params)))
+            init_grad = jax.tree_map(jnp.zeros_like, to_dtype(state.params))
             # loop accum minibatch step over the number of gradient accumulation steps
-            loss, num_labels, grad = jax.lax.fori_loop(
-                0,
-                gradient_accumulation_steps,
-                accum_minibatch_step,
-                init_loss_labels_grad,
-            )
+            grad, (loss, num_labels) = jax.lax.scan(accum_minibatch_step, init_grad, batch)
 
         grad = jax.lax.psum(grad, "batch")
-        loss = jax.lax.psum(loss, "batch")
-        total_samples = jax.lax.psum(num_labels, "batch")
+        loss = jax.lax.psum(loss.sum(), "batch")
+        total_samples = jax.lax.psum(num_labels.sum(), "batch")
         grad = jax.tree_map(lambda g: g / total_samples, grad)
         loss = jax.tree_map(lambda l: l / total_samples, loss)
 
@@ -1091,7 +1083,7 @@ def main():
             return jax.tree_map(lambda x: x.reshape(-1, *x.shape[2::]), xs)
 
         train_features = np.empty(num_train_samples, dtype=object)
-        eval_features = np.empty(num_train_samples, dtype=object)
+        eval_features = np.empty(num_eval_samples, dtype=object)
 
         # Gather the indices for creating the batch and do a feature extraction step
         for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Extracting Train Features...", position=0)):
@@ -1136,7 +1128,11 @@ def main():
         for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
             samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
             batch = data_collator(samples)
-            batch["extract_features"] = np.array([train_features[int(idx)] for idx in batch_idx]) if model_args.save_feature_encoder_output else None
+            batch["extract_features"] = (
+                np.array([train_features[int(idx)] for idx in batch_idx])
+                if model_args.save_feature_encoder_output
+                else None
+            )
             batch = shard(batch.data)
             state, train_metric = p_train_step(state, batch)
 
