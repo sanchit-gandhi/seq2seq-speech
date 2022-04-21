@@ -26,6 +26,7 @@ import jax
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict, unfreeze
 from flax.linen import combine_masks, make_causal_mask
+from flax.linen import partitioning as nn_partitioning
 from flax.linen.attention import dot_product_attention_weights
 from jax import lax
 from jax.random import PRNGKey
@@ -34,11 +35,13 @@ from transformers.modeling_flax_outputs import (
     FlaxBaseModelOutputWithPastAndCrossAttentions,
     FlaxCausalLMOutputWithCrossAttentions,
 )
-from transformers.modeling_flax_utils import (
-    ACT2FN,
-    FlaxPreTrainedModel,
-)
-from transformers import BartConfig
+from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel
+
+from models.configuration_bart import BartConfig
+
+
+scan_with_axes = nn_partitioning.scan_with_axes
+remat = nn_partitioning.remat
 
 
 def shift_tokens_right(input_ids: np.array, pad_token_id: int, decoder_start_token_id: int) -> np.ndarray:
@@ -219,6 +222,7 @@ class FlaxBartAttention(nn.Module):
 
         return attn_output, attn_weights
 
+
 class FlaxBartDecoderLayer(nn.Module):
     config: BartConfig
     dtype: jnp.dtype = jnp.float32
@@ -266,6 +270,10 @@ class FlaxBartDecoderLayer(nn.Module):
         output_attentions: bool = True,
         deterministic: bool = True,
     ) -> Tuple[jnp.ndarray]:
+
+        if self.config.use_scan:
+            hidden_states = hidden_states[0]
+
         residual = hidden_states
 
         # Self Attention
@@ -304,6 +312,9 @@ class FlaxBartDecoderLayer(nn.Module):
         if output_attentions:
             outputs += (self_attn_weights, cross_attn_weights)
 
+        if self.config.use_scan:
+            outputs = (outputs, None)
+
         return outputs
 
 
@@ -311,12 +322,7 @@ class FlaxBartDecoderLayerCollection(nn.Module):
     config: BartConfig
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation
 
-    def setup(self):
-        self.layers = [
-            FlaxBartDecoderLayer(self.config, name=str(i), dtype=self.dtype) for i in range(self.config.decoder_layers)
-        ]
-        self.layerdrop = self.config.decoder_layerdrop
-
+    @nn.compact
     def __call__(
         self,
         hidden_states,
@@ -334,34 +340,72 @@ class FlaxBartDecoderLayerCollection(nn.Module):
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
 
-        for decoder_layer in self.layers:
+        print("decoder checkpointing:", self.config.gradient_checkpointing)
+        print("decoder scan:", self.config.use_scan)
+        num_decoder_layers = self.config.decoder_layers
+        BlockDecoderLayer = (
+            remat(
+                FlaxBartDecoderLayer,
+                static_argnums=(4, 5, 6),
+                prevent_cse=not self.config.use_scan,
+            )
+            if self.config.gradient_checkpointing
+            else FlaxBartDecoderLayer
+        )
+
+        if self.config.use_scan:
+            # since all decoder layers are the same, we use nn.scan directly
+            assert not output_attentions, "cannot use `scan` with `output_attentions` set to `True`"
+            assert not output_hidden_states, "cannot use `scan` with `output_hidden_states` set to `True`"
+            hidden_states = (hidden_states,)
+
+            # TODO: add layerdrop in checkpointed scan (note: default value for layerdrop in config is zero)
+            hidden_states, _ = scan_with_axes(
+                BlockDecoderLayer,
+                variable_axes={"params": 0, "cache": 0},
+                split_rngs={"params": True, "dropout": True},
+                in_axes=(nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast),
+                length=num_decoder_layers,
+            )(self.config, dtype=self.dtype, name="FlaxBartDecoderLayers")(
+                hidden_states,
+                attention_mask,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                init_cache,
+                output_attentions,
+                deterministic,
+            )
+            hidden_states = hidden_states[0]
+
+        else:
+            for layer in range(num_decoder_layers):
+                if output_hidden_states:
+                    all_hidden_states += (hidden_states,)
+                # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+                dropout_probability = random.uniform(0, 1)
+                if not deterministic and (dropout_probability < self.config.decoder_layerdrop):
+                    layer_outputs = (None, None, None)
+                else:
+                    layer_outputs = BlockDecoderLayer(self.config, dtype=self.dtype, name=str(layer),)(
+                        hidden_states,
+                        attention_mask,
+                        encoder_hidden_states,
+                        encoder_attention_mask,
+                        init_cache,
+                        output_attentions,
+                        deterministic,
+                    )
+
+                hidden_states = layer_outputs[0]
+                if output_attentions:
+                    all_self_attns += (layer_outputs[1],)
+
+                    if encoder_hidden_states is not None:
+                        all_cross_attentions += (layer_outputs[2],)
+
+            # add hidden states from the last decoder layer
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-                # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
-            dropout_probability = random.uniform(0, 1)
-            if not deterministic and (dropout_probability < self.layerdrop):
-                layer_outputs = (None, None, None)
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=attention_mask,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    init_cache=init_cache,
-                    output_attentions=output_attentions,
-                    deterministic=deterministic,
-                )
-
-            hidden_states = layer_outputs[0]
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
-
-                if encoder_hidden_states is not None:
-                    all_cross_attentions += (layer_outputs[2],)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
 
         outputs = [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions]
 
@@ -374,6 +418,7 @@ class FlaxBartDecoderLayerCollection(nn.Module):
             attentions=all_self_attns,
             cross_attentions=all_cross_attentions,
         )
+
 
 class FlaxBartDecoder(nn.Module):
     config: BartConfig
@@ -648,9 +693,10 @@ class FlaxBartDecoderWrapper(nn.Module):
 
 
 class FlaxBartForCausalLMModule(nn.Module):
-    """ Bart Decoder Module with a language modeling head on top (linear layer with weights tied to the input embeddings)
+    """Bart Decoder Module with a language modeling head on top (linear layer with weights tied to the input embeddings)
     e.g. for autoregressive tasks.
     """
+
     config: BartConfig
     dtype: jnp.dtype = jnp.float32
 
@@ -710,9 +756,10 @@ class FlaxBartForCausalLMModule(nn.Module):
 
 
 class FlaxBartForCausalLM(FlaxBartDecoderPreTrainedModel):
-    """ Bart Decoder Model with a language modeling head on top (linear layer with weights tied to the input embeddings)
+    """Bart Decoder Model with a language modeling head on top (linear layer with weights tied to the input embeddings)
     e.g. for autoregressive tasks.
     """
+
     module_class = FlaxBartForCausalLMModule
 
     def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jnp.DeviceArray] = None):

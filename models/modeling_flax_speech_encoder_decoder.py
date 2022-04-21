@@ -27,9 +27,11 @@ from jax.random import PRNGKey
 from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutputWithCrossAttentions, FlaxSeq2SeqLMOutput
 from transformers.modeling_flax_utils import FlaxPreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
-from transformers import AutoConfig, SpeechEncoderDecoderConfig
 from models.modeling_flax_wav2vec2 import FlaxWav2Vec2Model, FlaxWav2Vec2Module
 from models.modeling_flax_bart import FlaxBartForCausalLM, FlaxBartForCausalLMModule
+from models.configuration_bart import BartConfig
+from models.configuration_wav2vec2 import Wav2Vec2Config
+from models.configuration_speech_encoder_decoder import SpeechEncoderDecoderConfig
 
 logger = logging.get_logger(__name__)
 
@@ -867,7 +869,8 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
                 )
 
             if "config" not in kwargs_encoder:
-                encoder_config, kwargs_encoder = AutoConfig.from_pretrained(
+                # TODO: AutoConfig .from_pretrained
+                encoder_config, kwargs_encoder = Wav2Vec2Config.from_pretrained(
                     encoder_pretrained_model_name_or_path, **kwargs_encoder, return_unused_kwargs=True
                 )
                 if encoder_config.is_decoder is True or encoder_config.add_cross_attention is True:
@@ -894,7 +897,8 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
                 )
 
             if "config" not in kwargs_decoder:
-                decoder_config, kwargs_decoder = AutoConfig.from_pretrained(
+                # TODO: AutoConfig .from_pretrained
+                decoder_config, kwargs_decoder = BartConfig.from_pretrained(
                     decoder_pretrained_model_name_or_path, **kwargs_decoder, return_unused_kwargs=True
                 )
                 if decoder_config.is_decoder is False or decoder_config.add_cross_attention is False:

@@ -254,7 +254,7 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
     multisteps: bool = field(
         default=False,
         metadata={
-            "help": "Whether to use Optax MultiSteps for gradient accumulation. If `False` and `gradient_accumulation_steps > 1`, "
+            "help": "Whether to use Optax MultiSteps for gradient accumulation. If `False` (default) and `gradient_accumulation_steps > 1`, "
             "a custom gradient accumulation implementation will be employed."
         },
     )
@@ -695,6 +695,8 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
+    config.encoder.gradient_checkpointing = config.decoder.gradient_checkpointing = training_args.gradient_checkpointing
+
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name if model_args.feature_extractor_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -901,15 +903,24 @@ def main():
         flat_mask = {path: (path[-1] != "bias" and path[-2:] not in layer_norm_params) for path in flat_params}
         return traverse_util.unflatten_dict(flat_mask)
 
-    # Create adam optimizer
-    optim = optax.adamw(
-        learning_rate=linear_decay_lr_schedule_fn,
-        b1=training_args.adam_beta1,
-        b2=training_args.adam_beta2,
-        eps=training_args.adam_epsilon,
-        weight_decay=training_args.weight_decay,
-        mask=decay_mask_fn,
-    )
+    if training_args.adafactor:
+        # Create Adafactor optimizer
+        optim = optax.adafactor(
+            learning_rate=linear_decay_lr_schedule_fn,
+            dtype_momentum=jnp.bfloat16 if training_args.mixed_precision else jnp.float32,
+            weight_decay_rate=training_args.weight_decay,
+            weight_decay_mask=decay_mask_fn,
+        )
+    else:
+        # Create AdamW optimizer
+        optim = optax.adamw(
+            learning_rate=linear_decay_lr_schedule_fn,
+            b1=training_args.adam_beta1,
+            b2=training_args.adam_beta2,
+            eps=training_args.adam_epsilon,
+            weight_decay=training_args.weight_decay,
+            mask=decay_mask_fn,
+        )
 
     # Optax MultiSteps for gradient accumulation. We'll only call this optimizer transformation if gradient accumulation is required (i.e. gradient accumulation steps > 1)
     if training_args.multisteps and gradient_accumulation_steps > 1:
@@ -1125,7 +1136,7 @@ def main():
         train_batch_idx = jax.random.permutation(input_rng, train_batch_idx)
 
         # Gather the indices for creating the batch and do a training step
-        for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
+        for step, batch_idx in enumerate(tqdm(train_batch_idx[:1], desc="Training...", position=1)):
             samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
             batch = data_collator(samples)
             batch["extract_features"] = (
@@ -1138,7 +1149,7 @@ def main():
 
             cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
-            if cur_step % training_args.logging_steps == 0 and cur_step > 0:
+            if cur_step % training_args.logging_steps == 0:
                 # Save metrics
                 train_metric = unreplicate(train_metric)
                 train_time += time.time() - train_start
