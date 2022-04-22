@@ -85,6 +85,7 @@ class SpeechEncoderDecoderConfig(PretrainedConfig):
         encoder_config = kwargs.pop("encoder")
         decoder_config = kwargs.pop("decoder")
 
+        # TODO: Load configs from AutoConfig (as done in Transformers 🤗)
         self.encoder = Wav2Vec2Config(**encoder_config)
         self.decoder = BartConfig(**decoder_config)
         self.is_encoder_decoder = True
