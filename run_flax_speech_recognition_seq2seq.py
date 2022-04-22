@@ -321,18 +321,20 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
         """
 
         # clip gradients by global l2 norm
+        casted_max_grad_norm = to_dtype(self.max_grad_norm)
         g_norm = linear_algebra.global_norm(grads)
-        g_norm = jnp.maximum(self.max_grad_norm, g_norm)
-        grads = jax.tree_map(lambda t: (t / g_norm) * self.max_grad_norm, grads)
+        g_norm = jnp.maximum(casted_max_grad_norm, g_norm)
+        grads = jax.tree_map(lambda t: (t / g_norm) * casted_max_grad_norm, grads)
 
-        # upcast optimiser state to fp32 for update step
-        updates, new_opt_state = self.tx.update(grads, to_fp32(self.opt_state), self.params)
+        # downcast params to bf16 to match dtype of grads and optimizer state if mixed-precision training
+        updates, new_opt_state = self.tx.update(grads, self.opt_state, to_dtype(self.params))
 
-        new_params = optax.apply_updates(self.params, updates)
+        # upcast all to fp32 for updates
+        new_params = optax.apply_updates(to_fp32(self.params), to_fp32(updates))
         return self.replace(
             step=self.step + 1,
             params=new_params,
-            opt_state=to_dtype(new_opt_state),
+            opt_state=new_opt_state,
             **kwargs,
         )
 
@@ -935,7 +937,8 @@ def main():
     # Cross entropy loss
     def loss_fn(logits, labels):
         vocab_size = logits.shape[-1]
-        onehot_targets = onehot(labels, vocab_size)
+        # optax onehot always returns a float32 device array, need to downcast if performing mixed precision training
+        onehot_targets = to_dtype(onehot(labels, vocab_size))
         loss = optax.softmax_cross_entropy(logits, onehot_targets)
         # ignore padded tokens from loss, i.e. where labels are not set to -100
         padding = labels >= 0
@@ -964,7 +967,7 @@ def main():
         grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
 
         if gradient_accumulation_steps == 1 or training_args.multisteps:
-            (loss, num_labels), grad = grad_fn(state.params, batch)
+            (loss, num_labels), grad = grad_fn(to_dtype(state.params), batch)
 
         # Custom gradient accumulation
         else:
@@ -978,11 +981,11 @@ def main():
 
             def accum_minibatch_step(accum_grad, minibatch):
                 # compute loss, num labels and grad over minibatch and accumulate
-                (loss, num_labels), grad = grad_fn(state.params, minibatch)
+                (loss, num_labels), grad = grad_fn(to_dtype(state.params), minibatch)
                 return jax.tree_map(jnp.add, accum_grad, grad), (loss, num_labels)
 
             # create an initial state for accumulating losses, num labels and gradients
-            init_grad = jax.tree_map(jnp.zeros_like, state.params)
+            init_grad = jax.tree_map(jnp.zeros_like, to_dtype(state.params))
             # loop accum minibatch step over the number of gradient accumulation steps
             grad, (loss, num_labels) = jax.lax.scan(accum_minibatch_step, init_grad, batch)
 
