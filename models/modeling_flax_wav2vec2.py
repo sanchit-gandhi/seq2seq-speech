@@ -246,8 +246,6 @@ class FlaxConvLayersCollection(nn.Module):
             )
 
     def __call__(self, hidden_states):
-        print("encoder checkpointing:", self.config.gradient_checkpointing)
-        print("encoder scan:", self.config.use_scan)
         for i, conv_layer in enumerate(self.layers):
             hidden_states = conv_layer(hidden_states)
         return hidden_states

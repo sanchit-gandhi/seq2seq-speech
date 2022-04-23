@@ -340,8 +340,6 @@ class FlaxBartDecoderLayerCollection(nn.Module):
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
 
-        print("decoder checkpointing:", self.config.gradient_checkpointing)
-        print("decoder scan:", self.config.use_scan)
         num_decoder_layers = self.config.decoder_layers
         BlockDecoderLayer = (
             remat(

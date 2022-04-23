@@ -1076,6 +1076,8 @@ def main():
     logger.info(f"  Num gradient accumulation steps = {gradient_accumulation_steps}")
     logger.info(f"  Total train batch size (w. parallel & distributed) = {batch_size_per_update}")
     logger.info(f"  Total optimization steps = {total_train_steps}")
+    logger.info(f"  Gradient checkpointing: {config.encoder.gradient_checkpointing}")
+    logger.info(f"  Use scan: {config.encoder.use_scan}")
 
     # Create sampling rng
     rng, input_rng = jax.random.split(rng)
@@ -1136,7 +1138,7 @@ def main():
         train_batch_idx = jax.random.permutation(input_rng, train_batch_idx)
 
         # Gather the indices for creating the batch and do a training step
-        for step, batch_idx in enumerate(tqdm(train_batch_idx[:1], desc="Training...", position=1)):
+        for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
             samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
             batch = data_collator(samples)
             batch["extract_features"] = (
@@ -1163,7 +1165,6 @@ def main():
                     f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
                 )
 
-        continue
         # ======================== Evaluating ==============================
         eval_metrics = []
         eval_preds = []
