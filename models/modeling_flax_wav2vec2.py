@@ -22,17 +22,18 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
+from flax.linen import partitioning as nn_partitioning
 from flax.linen.attention import dot_product_attention_weights
 from jax import lax
 
 from transformers.modeling_flax_outputs import FlaxBaseModelOutput
-from transformers.modeling_flax_utils import (
-    ACT2FN,
-    FlaxPreTrainedModel,
-)
-
+from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel
 from transformers.utils import ModelOutput
-from transformers import Wav2Vec2Config
+
+from models.configuration_wav2vec2 import Wav2Vec2Config
+
+scan_with_axes = nn_partitioning.scan_with_axes
+remat = nn_partitioning.remat
 
 
 @flax.struct.dataclass
@@ -231,8 +232,10 @@ class FlaxConvLayersCollection(nn.Module):
 
     def setup(self):
         if self.config.feat_extract_norm == "layer":
+            # note that we can't use scan on the conv layers as they differ on a layer-by-layer basis
+            BlockLayer = remat(FlaxWav2Vec2LayerNormConvLayer) if self.config.gradient_checkpointing else FlaxWav2Vec2LayerNormConvLayer
             self.layers = [
-                FlaxWav2Vec2LayerNormConvLayer(self.config, layer_id=i, name=str(i), dtype=self.dtype)
+                BlockLayer(self.config, layer_id=i, name=str(i), dtype=self.dtype)
                 for i in range(self.config.num_feat_extract_layers)
             ]
         elif self.config.feat_extract_norm == "group":
@@ -427,6 +430,8 @@ class FlaxWav2Vec2EncoderLayerStableLayerNorm(nn.Module):
         self.final_layer_norm = nn.LayerNorm(epsilon=self.config.layer_norm_eps, dtype=self.dtype)
 
     def __call__(self, hidden_states, attention_mask=None, deterministic=True, output_attentions=False):
+        if self.config.use_scan:
+            hidden_states = hidden_states[0]
         attn_residual = hidden_states
         hidden_states = self.layer_norm(hidden_states)
         hidden_states, attn_weights = self.attention(
@@ -443,6 +448,9 @@ class FlaxWav2Vec2EncoderLayerStableLayerNorm(nn.Module):
         if output_attentions:
             outputs += (attn_weights,)
 
+        if self.config.use_scan:
+            outputs = (outputs, None)
+
         return outputs
 
 
@@ -450,12 +458,7 @@ class FlaxWav2Vec2EncoderLayerStableLayerNormCollection(nn.Module):
     config: Wav2Vec2Config
     dtype: jnp.dtype = jnp.float32
 
-    def setup(self):
-        self.layers = [
-            FlaxWav2Vec2EncoderLayerStableLayerNorm(self.config, name=str(i), dtype=self.dtype)
-            for i in range(self.config.num_hidden_layers)
-        ]
-
+    @nn.compact
     def __call__(
         self,
         hidden_states,
@@ -468,21 +471,52 @@ class FlaxWav2Vec2EncoderLayerStableLayerNormCollection(nn.Module):
         all_attentions = () if output_attentions else None
         all_hidden_states = () if output_hidden_states else None
 
-        for i, layer in enumerate(self.layers):
+        num_layers = self.config.num_hidden_layers
+        BlockEncoderLayer = (
+            remat(
+                FlaxWav2Vec2EncoderLayerStableLayerNorm,
+                static_argnums=(2, 3),
+                prevent_cse=not self.config.use_scan,
+            )
+            if self.config.gradient_checkpointing
+            else FlaxWav2Vec2EncoderLayerStableLayerNorm
+        )
+
+        if self.config.use_scan:
+            # since all decoder layers are the same, we use nn.scan directly
+            assert not output_attentions, "cannot use `scan` with `output_attentions` set to `True`"
+            assert not output_hidden_states, "cannot use `scan` with `output_hidden_states` set to `True`"
+            hidden_states = (hidden_states,)
+
+            hidden_states, _ = scan_with_axes(
+                BlockEncoderLayer,
+                variable_axes={"params": 0, "cache": 0},
+                split_rngs={"params": True, "dropout": True},
+                in_axes=(nn.broadcast, nn.broadcast, nn.broadcast),
+                length=num_layers,
+            )(self.config, dtype=self.dtype, name="FlaxWav2Vec2EncoderLayers",)(
+                hidden_states, attention_mask, deterministic, output_attentions
+            )
+            hidden_states = hidden_states[0]
+
+        else:
+            for layer in range(num_layers):
+                if output_hidden_states:
+                    all_hidden_states += (hidden_states,)
+
+                layer_outputs = BlockEncoderLayer(
+                    self.config,
+                    dtype=self.dtype,
+                    name=str(layer),
+                )(hidden_states, attention_mask, deterministic, output_attentions)
+
+                hidden_states = layer_outputs[0]
+
+                if output_attentions:
+                    all_attentions += (layer_outputs[1],)
+
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-
-            layer_outputs = layer(
-                hidden_states, attention_mask, deterministic=deterministic, output_attentions=output_attentions
-            )
-
-            hidden_states = layer_outputs[0]
-
-            if output_attentions:
-                all_attentions += (layer_outputs[1],)
-
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
 
         outputs = (hidden_states, all_hidden_states, all_attentions)
 
@@ -549,6 +583,7 @@ class FlaxWav2Vec2StableLayerNormEncoder(nn.Module):
             last_hidden_state=last_hidden_state, hidden_states=hidden_states, attentions=outputs.attentions
         )
 
+
 class FlaxWav2Vec2Adapter(nn.Module):
     config: Wav2Vec2Config
     dtype: jnp.dtype = jnp.float32
@@ -604,8 +639,9 @@ class FlaxWav2Vec2AdapterLayersCollection(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     def setup(self):
+        BlockAdapterLayer = remat(FlaxWav2Vec2AdapterLayer) if self.config.gradient_checkpointing else FlaxWav2Vec2AdapterLayer
         self.layers = [
-            FlaxWav2Vec2AdapterLayer(self.config, name=str(i), dtype=self.dtype)
+            BlockAdapterLayer(self.config, name=str(i), dtype=self.dtype)
             for i in range(self.config.num_adapter_layers)
         ]
 
