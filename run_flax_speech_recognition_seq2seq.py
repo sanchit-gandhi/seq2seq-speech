@@ -326,15 +326,15 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
         g_norm = jnp.maximum(casted_max_grad_norm, g_norm)
         grads = jax.tree_map(lambda t: (t / g_norm) * casted_max_grad_norm, grads)
 
-        # downcast params to bf16 to match dtype of grads and optimizer state if mixed-precision training
-        updates, new_opt_state = self.tx.update(grads, self.opt_state, to_dtype(self.params))
+        # perform update step in fp32 and subsequently downcast optimizer states if mixed precision training
+        # grads and opt_state in bf16 (need to upcast), params in fp32 (leave as is)
+        updates, new_opt_state = self.tx.update(to_fp32(grads), to_fp32(self.opt_state), self.params)
 
-        # upcast all to fp32 for updates
-        new_params = optax.apply_updates(to_fp32(self.params), to_fp32(updates))
+        new_params = optax.apply_updates(self.params, updates)
         return self.replace(
             step=self.step + 1,
             params=new_params,
-            opt_state=new_opt_state,
+            opt_state=to_dtype(new_opt_state),
             **kwargs,
         )
 
