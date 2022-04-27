@@ -312,6 +312,14 @@ class FlaxWav2Vec2Attention(nn.Module):
         )
 
         self.q_proj, self.k_proj, self.v_proj = dense(), dense(), dense()
+
+        self.fused_proj = nn.Dense(
+            self.embed_dim * 3,
+            use_bias=self.bias,
+            dtype=self.dtype,
+            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
+        )
+
         self.out_proj = dense()
 
         self.dropout_layer = nn.Dropout(rate=self.dropout)
@@ -331,11 +339,16 @@ class FlaxWav2Vec2Attention(nn.Module):
     ) -> Tuple[jnp.ndarray]:
         """Input shape: Batch x Time x Channel"""
 
-        # get query proj
-        query_states = self.q_proj(hidden_states)
+        if self.config.fuse_matmuls:
+            attention_states = self.fused_proj(hidden_states)
+            query_states, key_states, value_states = jnp.split(attention_states, 3, axis=-1)
 
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        else:
+            # get query proj
+            query_states = self.q_proj(hidden_states)
+
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
 
         query_states = self._split_heads(query_states)
         key_states = self._split_heads(key_states)

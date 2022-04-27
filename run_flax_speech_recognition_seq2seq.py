@@ -109,6 +109,12 @@ class ModelArguments:
     save_feature_encoder_output: bool = field(
         default=False, metadata={"help": "Whether to save the output of the feature encoder layers of the model."}
     )
+    hidden_dropout: float = field(
+        default=0.1,
+        metadata={
+            "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
+        },
+    )
 
 
 @flax.struct.dataclass
@@ -234,8 +240,8 @@ class DataTrainingArguments:
 # @flax.struct.dataclass
 @dataclass
 class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
-    mixed_precision: bool = field(
-        default=False,
+    precision: str = field(
+        default="full",
         metadata={
             "help": "Whether to enable mixed-precision training. If true, the optimizer is stored in half-precision (bfloat16) and computations are executed in half-precision"
             "**Note that this only specifies the dtype of the computation and optimizer state. It does not influence the dtype of model parameters.**"
@@ -256,6 +262,20 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
         metadata={
             "help": "Whether to use Optax MultiSteps for gradient accumulation. If `False` (default) and `gradient_accumulation_steps > 1`, "
             "a custom gradient accumulation implementation will be employed."
+        },
+    )
+    final_generation_max_length: int = field(
+        default=200,
+        metadata={
+            "help": "The `max_length` to use on each evaluation loop when `predict_with_generate=True`. Will default "
+            "to the `max_length` value of the model configuration."
+        },
+    )
+    final_generation_num_beams: int = field(
+        default=5,
+        metadata={
+            "help": "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. Will default "
+            "to the `num_beams` value of the model configuration."
         },
     )
 
@@ -620,15 +640,6 @@ def main():
     # Set up wandb run
     if jax.process_index() == 0:
         wandb.init(project=data_args.wandb_project, job_type=data_args.wandb_job_type)
-        wandb.config = {
-            "learning_rate": training_args.learning_rate,
-            "warmup_steps": training_args.warmup_steps,
-            "per_device_batch_size": training_args.per_device_train_batch_size,
-            "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-            "num_epochs": training_args.num_train_epochs,
-            "mixed_precision": training_args.mixed_precision,
-            "matmul_precision": training_args.matmul_precision,
-        }
 
     logger.info("Training/evaluation parameters %s", training_args)
 
@@ -695,7 +706,14 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
-    config.encoder.gradient_checkpointing = config.decoder.gradient_checkpointing = training_args.gradient_checkpointing
+    # update config according to training and model args
+    config.encoder.update(
+        {
+            "gradient_checkpointing": training_args.gradient_checkpointing,
+            "hidden_dropout": model_args.hidden_dropout,
+        }
+    )
+    config.decoder.update({"gradient_checkpointing": training_args.gradient_checkpointing})
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name if model_args.feature_extractor_name else model_args.model_name_or_path,
@@ -710,10 +728,21 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
+    if training_args.precision == 'full_mixed':
+        dtype = jnp.bfloat16
+        training_args.mixed_precision = True
+    elif training_args.precision == 'half_mixed':
+        dtype = jnp.bfloat16
+        training_args.mixed_precision = False
+    else:
+        dtype = jnp.float32
+        training_args.mixed_precision = False
+
     model = FlaxSpeechEncoderDecoderModel.from_pretrained(
         model_args.model_name_or_path,
         config=config,
-        dtype=jnp.bfloat16 if training_args.mixed_precision else jnp.float32,
+        dtype=dtype,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
@@ -1055,16 +1084,23 @@ def main():
 
     # Define generation function
     gen_kwargs = {"max_length": training_args.generation_max_length, "num_beams": training_args.generation_num_beams}
+    final_gen_kwargs = {"max_length": training_args.final_generation_max_length, "num_beams": training_args.final_generation_num_beams}
 
     def generate_step(params, batch):
         model.params = params
         output_ids = model.generate(batch["inputs"], **gen_kwargs)
         return output_ids.sequences
 
+    def final_generate_step(params, batch):
+        model.params = params
+        output_ids = model.generate(batch["inputs"], **final_gen_kwargs)
+        return output_ids.sequences
+
     # Create parallel version of the train and eval step
     p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
     p_eval_step = jax.pmap(eval_step, "batch")
     p_generate_step = jax.pmap(generate_step, "batch")
+    p_final_generate_step = jax.pmap(final_generate_step, "batch")
 
     # Replicate the train state on each device
     state = state.replicate()
@@ -1078,6 +1114,7 @@ def main():
     logger.info(f"  Total optimization steps = {total_train_steps}")
     logger.info(f"  Gradient checkpointing: {config.encoder.gradient_checkpointing}")
     logger.info(f"  Use scan: {config.encoder.use_scan}")
+    logger.info(f"  Fuse matmuls: {config.encoder.fuse_matmuls}")
 
     # Create sampling rng
     rng, input_rng = jax.random.split(rng)
@@ -1151,7 +1188,7 @@ def main():
 
             cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
-            if cur_step % training_args.logging_steps == 0:
+            if cur_step % training_args.logging_steps == 0 and cur_step > 0:
                 # Save metrics
                 train_metric = unreplicate(train_metric)
                 train_time += time.time() - train_start
@@ -1181,8 +1218,12 @@ def main():
 
             # generation
             if training_args.predict_with_generate:
-                generated_ids = p_generate_step(state.params, batch)
-                eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
+                if (epoch + 1) < num_epochs:
+                    generated_ids = p_generate_step(state.params, batch)
+                    eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
+                else:
+                    generated_ids = p_final_generate_step(state.params, batch)
+                    eval_preds.extend(jax.device_get(generated_ids.reshape(-1, final_gen_kwargs["max_length"])))
                 eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
 
         # normalize eval metrics
