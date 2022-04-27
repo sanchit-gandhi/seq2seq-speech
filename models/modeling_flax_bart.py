@@ -166,13 +166,10 @@ class FlaxBartAttention(nn.Module):
                 query_states = self.q_proj(hidden_states)
                 # cross_attentions
                 attention_states = self.fused_key_value(key_value_states)
-                key_states = attention_states[:, :, :self.embed_dim]
-                value_states = attention_states[:, :, self.embed_dim:]
+                key_states, value_states = jnp.split(attention_states, 2, axis=-1)
             else:
                 attention_states = self.fused_proj(hidden_states)
-                query_states = attention_states[:, :, :self.embed_dim]
-                key_states = attention_states[:, :, self.embed_dim: 2 * self.embed_dim]
-                value_states = attention_states[:, :, -self.embed_dim:]
+                query_states, key_states, value_states = jnp.split(attention_states, 3, axis=-1)
 
         else:
             # get query proj

@@ -341,9 +341,7 @@ class FlaxWav2Vec2Attention(nn.Module):
 
         if self.config.fuse_matmuls:
             attention_states = self.fused_proj(hidden_states)
-            query_states = attention_states[:, :, :self.embed_dim]
-            key_states = attention_states[:, :, self.embed_dim: 2 * self.embed_dim]
-            value_states = attention_states[:, :, -self.embed_dim:]
+            query_states, key_states, value_states = jnp.split(attention_states, 3, axis=-1)
 
         else:
             # get query proj
