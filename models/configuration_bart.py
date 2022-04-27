@@ -130,6 +130,7 @@ class BartConfig(PretrainedConfig):
         scale_embedding=False,
         use_cache=True,
         use_scan=False,
+        fuse_matmuls=False,
         num_labels=3,
         pad_token_id=1,
         bos_token_id=0,
@@ -158,6 +159,7 @@ class BartConfig(PretrainedConfig):
         self.classifier_dropout = classifier_dropout
         self.use_cache = use_cache
         self.use_scan = use_scan
+        self.fuse_matmuls = fuse_matmuls
         self.num_hidden_layers = encoder_layers
         self.scale_embedding = scale_embedding  # scale factor will be sqrt(d_model) if True
 

@@ -82,6 +82,21 @@ class FlaxBartAttention(nn.Module):
         )
 
         self.q_proj, self.k_proj, self.v_proj = dense(), dense(), dense()
+
+        self.fused_proj = nn.Dense(
+            self.embed_dim * 3,
+            use_bias=self.bias,
+            dtype=self.dtype,
+            kernel_init=jax.nn.initializers.normal(self.config.init_std),
+        )
+
+        self.fused_key_value = nn.Dense(
+            self.embed_dim * 2,
+            use_bias=self.bias,
+            dtype=self.dtype,
+            kernel_init=jax.nn.initializers.normal(self.config.init_std),
+        )
+
         self.out_proj = dense()
 
         self.dropout_layer = nn.Dropout(rate=self.dropout)
@@ -144,17 +159,33 @@ class FlaxBartAttention(nn.Module):
         is_cross_attention = key_value_states is not None
         batch_size = hidden_states.shape[0]
 
-        # get query proj
-        query_states = self.q_proj(hidden_states)
-        # get key, value proj
-        if is_cross_attention:
-            # cross_attentions
-            key_states = self.k_proj(key_value_states)
-            value_states = self.v_proj(key_value_states)
+        if self.config.fuse_matmuls:
+            # get key, value proj
+            if is_cross_attention:
+                # get query proj
+                query_states = self.q_proj(hidden_states)
+                # cross_attentions
+                attention_states = self.fused_key_value(key_value_states)
+                key_states = attention_states[:, :, :self.embed_dim]
+                value_states = attention_states[:, :, self.embed_dim:]
+            else:
+                attention_states = self.fused_proj(hidden_states)
+                query_states = attention_states[:, :, :self.embed_dim]
+                key_states = attention_states[:, :, self.embed_dim: 2 * self.embed_dim]
+                value_states = attention_states[:, :, -self.embed_dim:]
+
         else:
-            # self_attention
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
+            # get query proj
+            query_states = self.q_proj(hidden_states)
+            # get key, value proj
+            if is_cross_attention:
+                # cross_attentions
+                key_states = self.k_proj(key_value_states)
+                value_states = self.v_proj(key_value_states)
+            else:
+                # self_attention
+                key_states = self.k_proj(hidden_states)
+                value_states = self.v_proj(hidden_states)
 
         query_states = self._split_heads(query_states)
         key_states = self._split_heads(key_states)

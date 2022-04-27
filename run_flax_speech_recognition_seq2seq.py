@@ -234,8 +234,8 @@ class DataTrainingArguments:
 # @flax.struct.dataclass
 @dataclass
 class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
-    mixed_precision: bool = field(
-        default=False,
+    precision: str = field(
+        default="full",
         metadata={
             "help": "Whether to enable mixed-precision training. If true, the optimizer is stored in half-precision (bfloat16) and computations are executed in half-precision"
             "**Note that this only specifies the dtype of the computation and optimizer state. It does not influence the dtype of model parameters.**"
@@ -620,15 +620,6 @@ def main():
     # Set up wandb run
     if jax.process_index() == 0:
         wandb.init(project=data_args.wandb_project, job_type=data_args.wandb_job_type)
-        wandb.config = {
-            "learning_rate": training_args.learning_rate,
-            "warmup_steps": training_args.warmup_steps,
-            "per_device_batch_size": training_args.per_device_train_batch_size,
-            "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-            "num_epochs": training_args.num_train_epochs,
-            "mixed_precision": training_args.mixed_precision,
-            "matmul_precision": training_args.matmul_precision,
-        }
 
     logger.info("Training/evaluation parameters %s", training_args)
 
@@ -710,10 +701,21 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
+    if training_args.precision == 'full_mixed':
+        dtype = jnp.bfloat16
+        training_args.mixed_precision = True
+    elif training_args.precision == 'half_mixed':
+        dtype = jnp.bfloat16
+        training_args.mixed_precision = False
+    else:
+        dtype = jnp.float32
+        training_args.mixed_precision = False
+
     model = FlaxSpeechEncoderDecoderModel.from_pretrained(
         model_args.model_name_or_path,
         config=config,
-        dtype=jnp.bfloat16 if training_args.mixed_precision else jnp.float32,
+        dtype=dtype,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
@@ -1078,6 +1080,7 @@ def main():
     logger.info(f"  Total optimization steps = {total_train_steps}")
     logger.info(f"  Gradient checkpointing: {config.encoder.gradient_checkpointing}")
     logger.info(f"  Use scan: {config.encoder.use_scan}")
+    logger.info(f"  Fuse matmuls: {config.encoder.fuse_matmuls}")
 
     # Create sampling rng
     rng, input_rng = jax.random.split(rng)

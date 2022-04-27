@@ -256,6 +256,7 @@ class Wav2Vec2Config(PretrainedConfig):
         num_adapter_layers=3,
         output_hidden_size=None,
         use_scan=False,
+        fuse_matmuls=False,
         **kwargs
     ):
         super().__init__(**kwargs, pad_token_id=pad_token_id, bos_token_id=bos_token_id, eos_token_id=eos_token_id)
@@ -285,6 +286,7 @@ class Wav2Vec2Config(PretrainedConfig):
         self.do_stable_layer_norm = do_stable_layer_norm
         self.use_weighted_layer_sum = use_weighted_layer_sum
         self.use_scan = use_scan
+        self.fuse_matmuls = fuse_matmuls
 
         if (
             (len(self.conv_stride) != self.num_feat_extract_layers)
