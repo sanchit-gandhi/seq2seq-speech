@@ -115,6 +115,9 @@ class ModelArguments:
             "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
         },
     )
+    encoder_add_adapter: bool = field(
+        default=True, metadata={"help": "Whether to add an adapter layer between the encoder and decoder."}
+    )
 
 
 @flax.struct.dataclass
@@ -265,14 +268,14 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
         },
     )
     final_generation_max_length: int = field(
-        default=200,
+        default=None,
         metadata={
             "help": "The `max_length` to use on each evaluation loop when `predict_with_generate=True`. Will default "
             "to the `max_length` value of the model configuration."
         },
     )
     final_generation_num_beams: int = field(
-        default=5,
+        default=None,
         metadata={
             "help": "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. Will default "
             "to the `num_beams` value of the model configuration."
@@ -711,6 +714,7 @@ def main():
         {
             "gradient_checkpointing": training_args.gradient_checkpointing,
             "hidden_dropout": model_args.hidden_dropout,
+            "add_adapter": model_args.encoder_add_adapter,
         }
     )
     config.decoder.update({"gradient_checkpointing": training_args.gradient_checkpointing})
@@ -1084,7 +1088,8 @@ def main():
 
     # Define generation function
     gen_kwargs = {"max_length": training_args.generation_max_length, "num_beams": training_args.generation_num_beams}
-    final_gen_kwargs = {"max_length": training_args.final_generation_max_length, "num_beams": training_args.final_generation_num_beams}
+    final_gen_kwargs = {"max_length": training_args.final_generation_max_length if training_args.final_generation_max_length is not None else training_args.generation_max_length,
+                       "num_beams": training_args.final_generation_num_beams if training_args.final_generation_num_beams is not None else training_args.generation_num_beams}
 
     def generate_step(params, batch):
         model.params = params
