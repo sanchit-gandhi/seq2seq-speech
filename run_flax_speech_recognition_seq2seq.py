@@ -106,9 +106,6 @@ class ModelArguments:
     freeze_feature_encoder: bool = field(
         default=True, metadata={"help": "Whether to freeze the feature encoder layers of the model."}
     )
-    save_feature_encoder_output: bool = field(
-        default=False, metadata={"help": "Whether to save the output of the feature encoder layers of the model."}
-    )
     hidden_dropout: float = field(
         default=0.1,
         metadata={
@@ -967,15 +964,6 @@ def main():
         max_grad_norm=training_args.max_grad_norm,
     )
 
-    def feature_encoder(params, batch):
-        # TODO: comply with gradient accumulation in partial forward pass
-        # by using model.encode we only have to pass the inputs to the model (and thus move them onto TPU)
-        # the remainder of the batched data can stay on CPU
-        extract_features = model.encode(batch["inputs"], params=params, output_features=True)
-        return extract_features
-
-    p_feature_encoder = jax.pmap(feature_encoder, "batch")
-
     # Cross entropy loss
     def loss_fn(logits, labels):
         vocab_size = logits.shape[-1]
@@ -1119,47 +1107,6 @@ def main():
     logger.info(f"  Use scan: {config.encoder.use_scan}")
     logger.info(f"  Fuse matmuls: {config.encoder.fuse_matmuls}")
 
-    # Create sampling rng
-    rng, input_rng = jax.random.split(rng)
-
-    # Generate a train set (pre-epoch) by randomly shuffling sampling indices from the train dataset and grouping by length
-    train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
-    train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
-
-    # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
-    eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
-    eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
-
-    if model_args.save_feature_encoder_output:
-        # the inverse operation of the shard function
-        def inv_shard(xs):
-            return jax.tree_map(lambda x: x.reshape(-1, *x.shape[2::]), xs)
-
-        train_features = np.empty(num_train_samples, dtype=object)
-        eval_features = np.empty(num_eval_samples, dtype=object)
-
-        # Gather the indices for creating the batch and do a feature extraction step
-        for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Extracting Train Features...", position=0)):
-            samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
-            batch = data_collator(samples)
-            batch = shard(batch.data)
-            extract_features = p_feature_encoder(state.params, batch)
-            extract_features = inv_shard(extract_features)
-            for sample, idx in enumerate(batch_idx):
-                # vectorized_datasets["train"][int(idx)]["extract_features"] = np.array(extract_features[sample]) <- doesn't work?
-                train_features[idx] = np.array(extract_features[sample])
-
-        # Gather the indices for creating the batch and do a feature extraction step
-        for step, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Extracting Eval Features...", position=0)):
-            break
-            samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
-            batch = data_collator(samples)
-            batch = shard(batch.data)
-            extract_features = p_feature_encoder(state.params, batch)
-            extract_features = inv_shard(extract_features)
-            for sample, idx in enumerate(batch_idx):
-                eval_features[idx] = np.array(extract_features[sample])
-
     train_time = 0
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
     for epoch in epochs:
@@ -1169,23 +1116,14 @@ def main():
         # Create sampling rng
         rng, input_rng = jax.random.split(rng)
 
-        # TODO: modify the data collator / feature extraction process to randomly shuffle batches at each epoch
         # Generate an epoch by randomly shuffling sampling indices from the train dataset and grouping by length
-        # train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
-        # train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
-
-        # for now, we will just shuffle batches within the list of batch indices
-        train_batch_idx = jax.random.permutation(input_rng, train_batch_idx)
+        train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
+        train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
 
         # Gather the indices for creating the batch and do a training step
         for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
             samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
             batch = data_collator(samples)
-            batch["extract_features"] = (
-                np.array([train_features[int(idx)] for idx in batch_idx])
-                if model_args.save_feature_encoder_output
-                else None
-            )
             batch = shard(batch.data)
             state, train_metric = p_train_step(state, batch)
 
@@ -1209,6 +1147,10 @@ def main():
         eval_metrics = []
         eval_preds = []
         eval_labels = []
+
+        # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
+        eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
+        eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
 
         for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
             samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
