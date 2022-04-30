@@ -435,6 +435,7 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
         # split inputs and labels since they have to be of different lengths and need
         # different padding methods
         input_features = [{"input_values": feature["input_values"]} for feature in features]
+        input_ids = [feature["input_id"] for feature in features]
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
         # reformat list to dict and set to pytorch format
@@ -468,6 +469,7 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
         labels = labels.filled(fill_value=-100)
 
         batch["inputs"] = batch.pop("input_values")
+        batch["input_ids"] = input_ids
         batch["labels"] = labels
         batch["decoder_input_ids"] = decoder_input_ids
 
@@ -582,14 +584,24 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, epoch, num_log=50):
+def write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step, num_log=50):
     if jax.process_index() == 0:
-        # convert str data to a wandb compatible format
-        str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
-        # we'll log the first 50 predictions for each epoch
-        wandb.log(
-            {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=["label_str", "pred_str"], data=str_data[:num_log])}
-        )
+        num_log = min(num_log, len(label_str))
+        if not final_step:
+            # convert str data to a wandb compatible format
+            str_data = [[eval_ids[i], label_str[i], pred_str[i]] for i in range(num_log)]
+            wandb.log(
+                {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=["id", "label_str", "pred_str"], data=str_data)}
+            )
+        else:
+            num_beams = len(pred_str)
+            # convert str data to a wandb compatible format over beams
+            str_data = [[eval_ids[i], label_str[i]] + [pred_str[beam][i] for beam in range(num_beams)] for i in
+                        range(num_log)]
+            columns = ["id", "label_str"] + [f"beam_{i+1}" for i in range(num_beams)]
+            wandb.log(
+                {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data)}
+            )
 
 
 def create_learning_rate_fn(
@@ -784,6 +796,7 @@ def main():
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
         batch["input_length"] = len(batch["input_values"])
+        batch["input_id"] = batch["id"]
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
@@ -829,17 +842,28 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {cache}.")
         return
 
+    first_50_eval = vectorized_datasets["eval"]['input_id'][:50]
+
     # 8. Load Metric
     metric = load_metric("wer")
 
-    def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
+    def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]], final_step):
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
-
-        pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(padded_ids, skip_special_tokens=True)
 
-        wer = metric.compute(predictions=pred_str, references=label_str)
+        if not final_step:
+            pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+            wer = metric.compute(predictions=pred_str, references=label_str)
+        else:
+            pred_ids = np.array(pred_ids)
+            num_beams = pred_ids.shape[1]
+            pred_str = []
+            for beam in reversed(range(num_beams)):
+                # decode on a beam-by-beam basis
+                pred_str.append(tokenizer.batch_decode(pred_ids[:, beam, :], skip_special_tokens=True))
+            # compute wer for top beam
+            wer = metric.compute(predictions=pred_str[0], references=label_str)
 
         return {"wer": wer}, pred_str, label_str
 
@@ -901,7 +925,6 @@ def main():
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
     num_train_samples = len(vectorized_datasets["train"])
-    num_eval_samples = len(vectorized_datasets["eval"])
     steps_per_epoch = num_train_samples // batch_size_per_update
     total_train_steps = steps_per_epoch * num_epochs
     to_dtype = to_bf16 if training_args.mixed_precision else to_fp32
@@ -1124,6 +1147,7 @@ def main():
         for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
             samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
             batch = data_collator(samples)
+            batch.pop("input_ids")
             batch = shard(batch.data)
             state, train_metric = p_train_step(state, batch)
 
@@ -1146,6 +1170,7 @@ def main():
         # ======================== Evaluating ==============================
         eval_metrics = []
         eval_preds = []
+        eval_ids = []
         eval_labels = []
 
         # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
@@ -1155,6 +1180,7 @@ def main():
         for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
             samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
             batch = data_collator(samples)
+            eval_ids.extend(batch.pop("input_ids"))
             batch = shard(batch.data)
             labels = batch["labels"]
 
@@ -1163,12 +1189,13 @@ def main():
 
             # generation
             if training_args.predict_with_generate:
-                if (epoch + 1) < num_epochs:
+                final_step = (epoch + 1) == num_epochs
+                if not final_step:
                     generated_ids = p_generate_step(state.params, batch)
                     eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
                 else:
                     generated_ids = p_final_generate_step(state.params, batch)
-                    eval_preds.extend(jax.device_get(generated_ids.reshape(-1, final_gen_kwargs["max_length"])))
+                    eval_preds.extend(jax.device_get(generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])))
                 eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
 
         # normalize eval metrics
@@ -1181,7 +1208,7 @@ def main():
         pred_str = []
         label_str = []
         if training_args.predict_with_generate:
-            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
+            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels, final_step)
             eval_metrics.update(wer_metric)
             wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
 
@@ -1192,7 +1219,7 @@ def main():
 
         # Save metrics
         write_wandb_log(eval_metrics, cur_step, prefix="eval")
-        write_wandb_pred(pred_str, label_str, epoch)
+        write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step)
         # if has_tensorboard and jax.process_index() == 0:
         # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 

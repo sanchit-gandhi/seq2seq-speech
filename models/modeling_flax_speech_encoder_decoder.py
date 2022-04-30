@@ -1227,8 +1227,8 @@ class FlaxSpeechEncoderDecoderModel(FlaxPreTrainedModel):
         sequences = jnp.where(none_finished[:, None, None], state.sequences, state.running_sequences)
         scores = jnp.where(none_finished[:, None], state.scores, state.running_scores)
 
-        # take best beam for each batch
-        sequences = sequences[:, -1]
+        # return all beams for each batch and the best score
+        sequences = sequences[:, :]
         scores = scores[:, -1]
 
         return FlaxBeamSearchOutput(sequences=sequences, scores=scores)
