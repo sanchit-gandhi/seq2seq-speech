@@ -26,7 +26,7 @@ from flax.linen import partitioning as nn_partitioning
 from flax.linen.attention import dot_product_attention_weights
 from jax import lax
 
-from transformers.modeling_flax_outputs import FlaxBaseModelOutput
+from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput
 from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel
 from transformers.utils import ModelOutput
 
@@ -751,6 +751,11 @@ class FlaxWav2Vec2PreTrainedModel(FlaxPreTrainedModel):
     ):
         return self.module._get_feat_extract_output_lengths(input_lengths, add_adapter=add_adapter)
 
+    def _get_feature_vector_attention_mask(
+        self, feature_vector_length: int, attention_mask: jnp.ndarray, add_adapter=None
+    ):
+        return self.module._get_feature_vector_attention_mask(feature_vector_length, attention_mask, add_adapter=add_adapter)
+
 
 class FlaxWav2Vec2Module(nn.Module):
     config: Wav2Vec2Config
@@ -856,7 +861,6 @@ class FlaxWav2Vec2Module(nn.Module):
     def _get_feature_vector_attention_mask(
         self, feature_vector_length: int, attention_mask: jnp.ndarray, add_adapter=None
     ):
-
         # Effectively attention_mask.sum(-1), but not inplace to be able to run
         # on inference mode.
         non_padded_lengths = attention_mask.cumsum(axis=-1)[:, -1]
@@ -877,32 +881,94 @@ class FlaxWav2Vec2Model(FlaxWav2Vec2PreTrainedModel):
     module_class = FlaxWav2Vec2Module
 
 
-FLAX_WAV2VEC2_MODEL_DOCSTRING = """
-    Returns:
+class FlaxWav2Vec2ForCTCModule(nn.Module):
+    config: Wav2Vec2Config
+    dtype: jnp.dtype = jnp.float32
 
-    Example:
+    def setup(self):
+        self.wav2vec2 = FlaxWav2Vec2Module(self.config, dtype=self.dtype)
+        self.dropout = nn.Dropout(rate=self.config.final_dropout)
+        self.lm_head = nn.Dense(
+            self.config.vocab_size,
+            kernel_init=jax.nn.initializers.normal(self.config.initializer_range),
+            dtype=self.dtype,
+        )
 
-    ```python
-    >>> from transformers import Wav2Vec2Processor, FlaxWav2Vec2Model
-    >>> from datasets import load_dataset
-    >>> import soundfile as sf
+    def __call__(
+        self,
+        input_values,
+        attention_mask=None,
+        mask_time_indices=None,
+        extract_features=None,
+        deterministic=True,
+        output_attentions=None,
+        output_hidden_states=None,
+        output_features=False,
+        freeze_feature_encoder=False,
+        return_dict=None,
+    ):
+        outputs = self.wav2vec2(
+            input_values,
+            attention_mask=attention_mask,
+            mask_time_indices=mask_time_indices,
+            deterministic=deterministic,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            freeze_feature_encoder=freeze_feature_encoder,
+            return_dict=return_dict,
+        )
 
-    >>> processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-large-lv60")
-    >>> model = FlaxWav2Vec2Model.from_pretrained("facebook/wav2vec2-large-lv60")
+        hidden_states = outputs[0]
+        hidden_states = self.dropout(hidden_states, deterministic=deterministic)
+
+        logits = self.lm_head(hidden_states)
+
+        if not return_dict:
+            return (logits,) + outputs[2:]
+
+        return FlaxCausalLMOutput(logits=logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions)
+
+    def _get_feat_extract_output_lengths(
+        self, input_lengths: Union[jnp.ndarray, int], add_adapter: Optional[bool] = None
+    ):
+        """
+        Computes the output length of the convolutional layers
+        """
+
+        add_adapter = self.config.add_adapter if add_adapter is None else add_adapter
+
+        def _conv_out_length(input_length, kernel_size, stride):
+            # 1D convolutional layer output length formula taken
+            # from https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
+            return (input_length - kernel_size) // stride + 1
+
+        for kernel_size, stride in zip(self.config.conv_kernel, self.config.conv_stride):
+            input_lengths = _conv_out_length(input_lengths, kernel_size, stride)
+
+        if add_adapter:
+            for _ in range(self.config.num_adapter_layers):
+                input_lengths = _conv_out_length(input_lengths, 1, self.config.adapter_stride)
+
+        return input_lengths
+
+    def _get_feature_vector_attention_mask(
+        self, feature_vector_length: int, attention_mask: jnp.ndarray, add_adapter=None
+    ):
+        # Effectively attention_mask.sum(-1), but not inplace to be able to run
+        # on inference mode.
+        non_padded_lengths = attention_mask.cumsum(axis=-1)[:, -1]
+
+        output_lengths = self._get_feat_extract_output_lengths(non_padded_lengths, add_adapter=add_adapter)
+
+        batch_size = attention_mask.shape[0]
+
+        attention_mask = jnp.zeros((batch_size, feature_vector_length), dtype=attention_mask.dtype)
+        # these two operations makes sure that all values
+        # before the output lengths indices are attended to
+        attention_mask = attention_mask.at[jnp.arange(attention_mask.shape[0]), output_lengths - 1].set(1)
+        attention_mask = jnp.flip(jnp.flip(attention_mask, -1).cumsum(-1), -1).astype("bool")
+        return attention_mask
 
 
-    >>> def map_to_array(batch):
-    ...     speech, _ = sf.read(batch["file"])
-    ...     batch["speech"] = speech
-    ...     return batch
-
-
-    >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    >>> ds = ds.map(map_to_array)
-
-    >>> input_values = processor(
-    ...     ds["speech"][0], sampling_rate=16_000, return_tensors="np"
-    >>> ).input_values  # Batch size 1
-    >>> hidden_states = model(input_values).last_hidden_state
-    ```
-"""
+class FlaxWav2Vec2ForCTC(FlaxWav2Vec2PreTrainedModel):
+    module_class = FlaxWav2Vec2ForCTCModule
