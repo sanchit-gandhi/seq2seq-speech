@@ -157,6 +157,13 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    max_test_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of test examples to this "
+            "value if set."
+        },
+    )
     audio_column_name: str = field(
         default="audio",
         metadata={"help": "The name of the dataset column containing the audio data. Defaults to 'audio'"},
@@ -224,7 +231,13 @@ class DataTrainingArguments:
     eval_split_name: str = field(
         default="test",
         metadata={
-            "help": "The name of the training data set split to use (via the datasets library). Defaults to 'train'"
+            "help": "The name of the evaluation data set split to use (via the datasets library). Defaults to 'validation'"
+        },
+    )
+    test_split_name: str = field(
+        default="test",
+        metadata={
+            "help": "The name of the test data set split to use (via the datasets library). Defaults to 'test'"
         },
     )
     do_lower_case: bool = field(
@@ -592,10 +605,10 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step, top_ids=None):
+def write_wandb_pred(pred_str, label_str, eval_ids, epoch, prefix="eval", beam_search=True, top_ids=None):
     if jax.process_index() == 0:
-        if top_ids is not None:
-            if not final_step:
+        if top_ids:
+            if not beam_search:
                 # convert str data to a wandb compatible format
                 str_data = []
                 for id in top_ids:
@@ -605,7 +618,7 @@ def write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step, top_ids=N
                     except ValueError:
                         continue
                 wandb.log(
-                    {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=["id", "label_str", "pred_str"], data=str_data)}
+                    {f"{prefix}/predictions/epoch_{epoch + 1}": wandb.Table(columns=["id", "label_str", "pred_str"], data=str_data)}
                 )
             else:
                 num_beams = len(pred_str)
@@ -620,15 +633,15 @@ def write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step, top_ids=N
                         continue
                 columns = ["id", "label_str"] + [f"beam_{i+1}" for i in range(num_beams)]
                 wandb.log(
-                    {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data)}
+                    {f"{prefix}/predictions/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data)}
                 )
         else:
             num_log = min(len(label_str), 50)
-            if not final_step:
+            if not beam_search:
                 # convert str data to a wandb compatible format
                 str_data = [[eval_ids[idx], label_str[idx], pred_str[idx]] for idx in range(num_log)]
                 wandb.log(
-                    {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=["id", "label_str", "pred_str"],
+                    {f"{prefix}/predictions/epoch_{epoch + 1}": wandb.Table(columns=["id", "label_str", "pred_str"],
                                                                    data=str_data)}
                 )
             else:
@@ -636,7 +649,7 @@ def write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step, top_ids=N
                 str_data = [[eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)] for idx in range(num_log)]
                 columns = ["id", "label_str"] + [f"beam_{i + 1}" for i in range(num_beams)]
                 wandb.log(
-                    {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data)}
+                    {f"{prefix}/predictions/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data)}
                 )
 
 def create_learning_rate_fn(
@@ -725,6 +738,14 @@ def main():
             data_args.dataset_name,
             data_args.dataset_config_name,
             split=data_args.eval_split_name,
+            cache_dir=data_args.dataset_cache_dir,
+        )
+
+    if training_args.do_predict:
+        raw_datasets["test"] = load_dataset(
+            data_args.dataset_name,
+            data_args.dataset_config_name,
+            split=data_args.test_split_name,
             cache_dir=data_args.dataset_cache_dir,
         )
 
@@ -831,6 +852,9 @@ def main():
     if data_args.max_eval_samples is not None:
         raw_datasets["eval"] = raw_datasets["eval"].select(range(data_args.max_eval_samples))
 
+    if data_args.max_test_samples is not None:
+        raw_datasets["test"] = raw_datasets["test"].select(range(data_args.max_eval_samples))
+
     def prepare_dataset(batch):
         # process audio
         sample = batch[audio_column_name]
@@ -885,16 +909,18 @@ def main():
         return
 
     first_50_eval = vectorized_datasets["eval"]["input_id"][:50]
+    if training_args.do_predict:
+        first_50_test = vectorized_datasets["test"]["input_id"][:50]
 
     # 8. Load Metric
     metric = load_metric("wer")
 
-    def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]], final_step):
+    def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]], beam_search=False):
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(padded_ids, skip_special_tokens=True)
 
-        if not final_step:
+        if not beam_search:
             pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
             wer = metric.compute(predictions=pred_str, references=label_str)
         else:
@@ -1250,7 +1276,7 @@ def main():
         pred_str = []
         label_str = []
         if training_args.predict_with_generate:
-            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels, final_step)
+            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels, beam_search=final_step)
             eval_metrics.update(wer_metric)
             wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
 
@@ -1261,7 +1287,7 @@ def main():
 
         # Save metrics
         write_wandb_log(eval_metrics, cur_step, prefix="eval")
-        write_wandb_pred(pred_str, label_str, eval_ids, epoch, final_step, top_ids=first_50_eval if data_args.log_first_ids else None)
+        write_wandb_pred(pred_str, label_str, eval_ids, epoch, beam_search=final_step, top_ids=first_50_eval if data_args.log_first_ids else None)
         # if has_tensorboard and jax.process_index() == 0:
         # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
@@ -1272,6 +1298,58 @@ def main():
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
                 repo.push_to_hub(commit_message=f"Saving weights and logs of epoch {epoch}", blocking=False)
+
+    # ======================== Prediction ==============================
+    if training_args.do_predict:
+        pred_metrics = []
+        pred_generations = []
+        pred_ids = []
+        pred_labels = []
+
+        # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
+        pred_samples_idx = get_grouped_indices(vectorized_datasets["test"], eval_batch_size)
+        pred_batch_idx = generate_batch_splits(pred_samples_idx, eval_batch_size)
+
+        for i, batch_idx in enumerate(tqdm(pred_batch_idx, desc="Predicting ...", position=2)):
+            samples = [vectorized_datasets["test"][int(idx)] for idx in batch_idx]
+            batch = data_collator(samples)
+            pred_ids.extend(batch.pop("input_ids"))
+            batch = shard(batch.data)
+            labels = batch["labels"]
+
+            metrics = p_eval_step(state.params, batch)
+            pred_metrics.append(metrics)
+
+            # generation
+            if training_args.predict_with_generate:
+                generated_ids = p_final_generate_step(state.params, batch)
+                pred_generations.extend(jax.device_get(generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])))
+                pred_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+
+        # normalize eval metrics
+        pred_metrics = get_metrics(pred_metrics)
+        pred_metrics = jax.tree_map(jnp.mean, pred_metrics)
+        pred_metrics = to_fp32(pred_metrics)
+
+        # compute WER metric and get predicted string (for debugging)
+        wer_desc = ""
+        pred_str = []
+        label_str = []
+        if training_args.predict_with_generate:
+            wer_metric, pred_str, label_str = compute_metrics(pred_generations, pred_labels, beam_search=True)
+            pred_metrics.update(wer_metric)
+            wer_desc = " ".join([f"Test {key}: {value} |" for key, value in wer_metric.items()])
+
+        # Print metrics and update progress bar
+        desc = f"Epoch... ({epoch + 1}/{num_epochs} | Test Loss: {pred_metrics['loss']} | {wer_desc})"
+        epochs.write(desc)
+        epochs.desc = desc
+
+        # Save metrics
+        write_wandb_log(pred_metrics, cur_step + 1, prefix="test")
+        write_wandb_pred(pred_str, label_str, pred_ids, epoch, prefix="test", beam_search=True,
+                         top_ids=first_50_test if data_args.log_first_ids else None)
+
 
 
 if __name__ == "__main__":
