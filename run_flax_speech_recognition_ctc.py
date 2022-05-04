@@ -42,9 +42,9 @@ from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, shard, shard_prng_key
 from huggingface_hub import Repository
 from models.modeling_flax_wav2vec2 import FlaxWav2Vec2ForCTC
+from models.configuration_wav2vec2 import Wav2Vec2Config
 from optax._src import linear_algebra
 from transformers import (
-    AutoConfig,
     AutoFeatureExtractor,
     AutoProcessor,
     AutoTokenizer,
@@ -53,7 +53,6 @@ from transformers import (
     is_tensorboard_available,
 )
 from transformers.file_utils import get_full_repo_name
-from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -111,9 +110,6 @@ class ModelArguments:
         metadata={
             "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
         },
-    )
-    encoder_add_adapter: bool = field(
-        default=True, metadata={"help": "Whether to add an adapter layer between the encoder and decoder."}
     )
 
 
@@ -174,13 +170,6 @@ class DataTrainingArguments:
     min_duration_in_seconds: float = field(
         default=0.0, metadata={"help": "Filter audio files that are shorter than `min_duration_in_seconds` seconds"}
     )
-    max_target_length: Optional[int] = field(
-        default=128,
-        metadata={
-            "help": "The maximum total sequence length for target text after tokenization. Sequences longer "
-            "than this will be truncated, sequences shorter will be padded."
-        },
-    )
     min_target_length: Optional[int] = field(
         default=0,
         metadata={
@@ -228,11 +217,11 @@ class DataTrainingArguments:
         metadata={"help": "Whether the target text should be lower cased."},
     )
     wandb_project: str = field(
-        default="flax-speech-recognition-seq2seq",
+        default="flax-speech-recognition-ctc",
         metadata={"help": "The name of the wandb project."},
     )
     wandb_job_type: str = field(
-        default="Seq2Seq",
+        default="CTC",
         metadata={"help": "The name of the wandb job type."},
     )
 
@@ -303,7 +292,6 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
     """
 
     step: int
-    blank_id: int
     apply_fn: Callable = struct.field(pytree_node=False)
     get_attention_mask_fn: Callable = struct.field(pytree_node=False)
     params: core.FrozenDict[str, Any]
@@ -364,17 +352,6 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
         return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
 
 
-def shift_tokens_right(label_ids: np.array, decoder_start_token_id: int) -> np.ndarray:
-    """
-    Shift label ids one token to the right.
-    """
-    shifted_label_ids = np.zeros_like(label_ids)
-    shifted_label_ids[:, 1:] = label_ids[:, :-1]
-    shifted_label_ids[:, 0] = decoder_start_token_id
-
-    return shifted_label_ids
-
-
 @flax.struct.dataclass
 class FlaxDataCollatorSpeechSeq2SeqWithPadding:
     """
@@ -398,8 +375,6 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
             See above for details.
         max_input_length (:obj:`float`, `optional`):
             Maximum length of the ``input_values`` of the returned list and optionally padding length (see above).
-        max_target_length (:obj:`int`, `optional`):
-            Maximum length of the ``labels`` of the returned list and optionally padding length (see above).
         pad_input_to_multiple_of (:obj:`int`, `optional`):
             If set will pad the input sequence to a multiple of the provided value.
             This is especially useful to enable the use of Tensor Cores on NVIDIA hardware with compute capability >=
@@ -441,12 +416,10 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
             return_tensors="np",
         )
 
-        # if bos token is appended in previous tokenization step,
-        # cut bos token here as it's append later anyways
         labels = labels_batch["input_ids"]
-        labels = jnp.where(labels_batch["attention_mask"] == 0, -100, labels)
+        labels = np.ma.array(labels, mask=np.not_equal(labels_batch.attention_mask, 1))
+        labels = labels.filled(fill_value=-100)
 
-        batch["inputs"] = batch.pop("input_values")
         batch["labels"] = labels
 
         return batch
@@ -746,21 +719,6 @@ def main():
     jax.config.update("jax_default_matmul_precision", training_args.matmul_precision)
     logger.info(f"JAX devices: {jax.device_count()}, matmul precision: {training_args.matmul_precision}")
 
-    # TODO: 3. Detecting last checkpoint and eventually continue from last checkpoint
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
-
     # 4. Load dataset
     raw_datasets = DatasetDict()
 
@@ -798,7 +756,7 @@ def main():
     #
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
-    config = AutoConfig.from_pretrained(
+    config = Wav2Vec2Config.from_pretrained(
         model_args.config_name if model_args.config_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
@@ -806,27 +764,25 @@ def main():
     )
 
     # update config according to training and model args
-    config.encoder.update(
+    config.update(
         {
             "gradient_checkpointing": training_args.gradient_checkpointing,
             "hidden_dropout": model_args.hidden_dropout,
-            "add_adapter": model_args.encoder_add_adapter,
         }
     )
-    config.decoder.update({"gradient_checkpointing": training_args.gradient_checkpointing})
-
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name if model_args.feature_extractor_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+    do_lower_case = data_args.do_lower_case
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
-        use_fast=model_args.use_fast_tokenizer,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+        do_lower_case=do_lower_case,
     )
 
     if training_args.precision == 'full_mixed':
@@ -848,9 +804,6 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
-    if model.config.decoder_start_token_id is None:
-        raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
-
     # 6. Resample speech dataset ALWAYS
     raw_datasets = raw_datasets.cast_column(
             data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
@@ -860,14 +813,11 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
-    max_target_length = data_args.max_target_length
-    min_target_length = data_args.min_target_length
     pad_input_to_multiple_of = data_args.pad_input_to_multiple_of
     audio_column_name = data_args.audio_column_name
     num_workers = data_args.preprocessing_num_workers
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
-    do_lower_case = data_args.do_lower_case
 
     if data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -889,13 +839,12 @@ def main():
         batch["labels_length"] = len(batch["labels"])
         return batch
 
-    with training_args.main_process_first(desc="dataset map pre-processing"):
-        vectorized_datasets = raw_datasets.map(
-            prepare_dataset,
-            remove_columns=next(iter(raw_datasets.values())).column_names,
-            num_proc=data_args.preprocessing_num_workers,
-            desc="preprocess train dataset",
-        )
+    vectorized_datasets = raw_datasets.map(
+        prepare_dataset,
+        remove_columns=next(iter(raw_datasets.values())).column_names,
+        num_proc=data_args.preprocessing_num_workers,
+        desc="preprocess train dataset",
+    )
 
     # filter data with inputs shorter than min_input_length or longer than max_input_length
     def is_audio_in_length_range(length):
@@ -905,16 +854,6 @@ def main():
         is_audio_in_length_range,
         num_proc=num_workers,
         input_columns=["input_length"],
-    )
-
-    # filter data with targets shorter than min_target_length or longer than max_target_length
-    def is_labels_in_length_range(length):
-        return length > min_target_length and length < max_target_length
-
-    vectorized_datasets = vectorized_datasets.filter(
-        is_labels_in_length_range,
-        num_proc=num_workers,
-        input_columns=["labels_length"],
     )
 
     # for large datasets it is advised to run the preprocessing on a
@@ -941,12 +880,10 @@ def main():
 
         return {"wer": wer}, pred_str, label_str
 
-    # 9. Create a single speech processor
-    if is_main_process(training_args.local_rank):
-        # save feature extractor, tokenizer and config
-        feature_extractor.save_pretrained(training_args.output_dir)
-        tokenizer.save_pretrained(training_args.output_dir)
-        config.save_pretrained(training_args.output_dir)
+    # 9. save feature extractor, tokenizer and config
+    feature_extractor.save_pretrained(training_args.output_dir)
+    tokenizer.save_pretrained(training_args.output_dir)
+    config.save_pretrained(training_args.output_dir)
 
     processor = AutoProcessor.from_pretrained(training_args.output_dir)
 
@@ -983,6 +920,7 @@ def main():
             )
         else:
             repo_name = training_args.hub_model_id
+        import ipdb; ipdb.set_trace()
         repo = Repository(training_args.output_dir, clone_from=repo_name)
 
     # 11. Initialize our training
@@ -996,7 +934,6 @@ def main():
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
     num_train_samples = len(vectorized_datasets["train"])
-    num_eval_samples = len(vectorized_datasets["eval"])
     steps_per_epoch = num_train_samples // batch_size_per_update
     total_train_steps = steps_per_epoch * num_epochs
     to_dtype = to_bf16 if training_args.mixed_precision else to_fp32
@@ -1053,13 +990,13 @@ def main():
     state = MixedPrecisionTrainState.create(
         apply_fn=model.__call__,
         get_attention_mask_fn=model._get_feature_vector_attention_mask,
-        blank_id=model.config.pad_token_id,
         params=model.params,
         tx=optim,
         to_dtype=to_dtype,
         dropout_rng=dropout_rng,
         max_grad_norm=training_args.max_grad_norm,
     )
+    blank_id = model.config.pad_token_id
 
     # Define gradient update step fn
     def train_step(state, batch):
@@ -1076,7 +1013,7 @@ def main():
                 train=True,
             )[0]
             logits_mask = state.get_attention_mask_fn(logits.shape[1], batch["attention_mask"])
-            loss = ctc_loss(logits, logits_mask, labels, state.blank_id, loss_reduction="mean")
+            loss = ctc_loss(logits, logits_mask, labels, blank_id, loss_reduction="mean")
 
             return loss
 
@@ -1116,17 +1053,13 @@ def main():
         layer_grad_norm = jax.tree_map(jnp.linalg.norm, grad)
         logs = {
             "layer_grad_norm": layer_grad_norm,
-            "encoder_grad_norm": jnp.linalg.norm(jax.tree_util.tree_leaves(layer_grad_norm["encoder"])),
-            "decoder_grad_norm": jnp.linalg.norm(jax.tree_util.tree_leaves(layer_grad_norm["decoder"])),
+            "grad_norm": jnp.linalg.norm(jax.tree_util.tree_leaves(layer_grad_norm)),
         }
-        logs["grad_norm"] = jnp.linalg.norm([logs["encoder_grad_norm"], logs["decoder_grad_norm"]])
 
         # compute parameter norms over all layers, total encoder, total decoder and global for detailed monitoring
         layer_param_norm = jax.tree_map(jnp.linalg.norm, new_state.params)
         logs["layer_param_norm"] = layer_param_norm
-        logs["encoder_param_norm"] = jnp.linalg.norm(jax.tree_util.tree_leaves(layer_param_norm["encoder"]))
-        logs["decoder_param_norm"] = jnp.linalg.norm(jax.tree_util.tree_leaves(layer_param_norm["decoder"]))
-        logs["param_norm"] = jnp.linalg.norm([logs["encoder_param_norm"], logs["decoder_param_norm"]])
+        logs["param_norm"] = jnp.linalg.norm(jax.tree_util.tree_leaves(layer_param_norm))
 
         metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
         metrics.update(logs)
@@ -1142,7 +1075,6 @@ def main():
         logits = model(**batch, params=params, train=False)[0]
 
         logits_mask = model._get_feature_vector_attention_mask(logits.shape[1], batch["attention_mask"])
-        blank_id = model.config.pad_token_id
         loss = ctc_loss(logits, logits_mask, labels, blank_id, loss_reduction="mean")
 
         pred_ids = jnp.argmax(logits, axis=-1)
@@ -1167,9 +1099,9 @@ def main():
     logger.info(f"  Num gradient accumulation steps = {gradient_accumulation_steps}")
     logger.info(f"  Total train batch size (w. parallel & distributed) = {batch_size_per_update}")
     logger.info(f"  Total optimization steps = {total_train_steps}")
-    logger.info(f"  Gradient checkpointing: {config.encoder.gradient_checkpointing}")
-    logger.info(f"  Use scan: {config.encoder.use_scan}")
-    logger.info(f"  Fuse matmuls: {config.encoder.fuse_matmuls}")
+    logger.info(f"  Gradient checkpointing: {config.gradient_checkpointing}")
+    logger.info(f"  Use scan: {config.use_scan}")
+    logger.info(f"  Fuse matmuls: {config.fuse_matmuls}")
 
     train_time = 0
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
@@ -1200,8 +1132,8 @@ def main():
                 # need to upcast all device arrays to fp32 for wandb logging (jnp.bfloat16 not supported) -> do this here OR in train_step
                 write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
                 # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
-                # if has_tensorboard and jax.process_index() == 0:
-                # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
+                if has_tensorboard and jax.process_index() == 0:
+                    write_train_metric(summary_writer, train_metrics, train_time, cur_step)
 
                 epochs.write(
                     f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
@@ -1251,8 +1183,8 @@ def main():
         # Save metrics
         write_wandb_log(eval_metrics, cur_step, prefix="eval")
         write_wandb_pred(pred_str, label_str, epoch)
-        # if has_tensorboard and jax.process_index() == 0:
-        # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+        if has_tensorboard and jax.process_index() == 0:
+            write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
         # save checkpoint after each epoch and push checkpoint to the hub
         if jax.process_index() == 0:

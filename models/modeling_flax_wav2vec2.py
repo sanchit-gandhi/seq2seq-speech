@@ -682,6 +682,7 @@ class FlaxWav2Vec2PreTrainedModel(FlaxPreTrainedModel):
         input_shape: Tuple = (1, 1024),
         seed: int = 0,
         dtype: jnp.dtype = jnp.float32,
+        _do_init: bool = True,
         **kwargs,
     ):
         module = self.module_class(config=config, dtype=dtype, **kwargs)
