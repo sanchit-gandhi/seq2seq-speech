@@ -12,7 +12,7 @@ python ./run_flax_speech_recognition_ctc.py \
 	--num_train_epochs="3" \
 	--learning_rate="3e-4" \
 	--logging_steps="1" \
-	--warmup_steps="500" \
+	--warmup_steps="250" \
 	--do_train \
 	--do_eval \
 	--overwrite_output_dir \
