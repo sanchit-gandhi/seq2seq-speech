@@ -11,7 +11,7 @@ python ./run_flax_speech_recognition_ctc.py \
 	--output_dir="train_clean_100" \
 	--num_train_epochs="3" \
 	--learning_rate="3e-4" \
-	--logging_steps="10" \
+	--logging_steps="25" \
 	--warmup_steps="250" \
 	--do_eval \
 	--do_train \

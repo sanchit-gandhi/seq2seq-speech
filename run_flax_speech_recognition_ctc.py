@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Fine-tuning the Flax library models for sequence to sequence speech recognition.
+Fine-tuning the Flax library models for connectionist temporal classification (CTC) speech recognition.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 
@@ -597,7 +597,7 @@ def ctc_loss(logits, logits_attention_mask, labels, blank_id, loss_reduction="me
     """
     # label paddings are indicated by -100
     labelpaddings = labels < 0
-    # logitpaddings are inverse of attention_mask
+    # logit paddings are the inverse of attention_mask
     logitpaddings = ~logits_attention_mask
 
     # Copied from https://github.com/tensorflow/lingvo/blob/master/lingvo/jax/layers/ctc_objectives.py
@@ -1066,14 +1066,14 @@ def main():
             to_dtype=to_dtype,
         )
 
-        # compute gradient norms over all layers, total encoder, total decoder and global for detailed monitoring
+        # compute gradient norms over all layers and globally for detailed monitoring
         layer_grad_norm = jax.tree_map(jnp.linalg.norm, grad)
         logs = {
             "layer_grad_norm": layer_grad_norm,
             "grad_norm": jnp.linalg.norm(jax.tree_util.tree_leaves(layer_grad_norm)),
         }
 
-        # compute parameter norms over all layers, total encoder, total decoder and global for detailed monitoring
+        # compute parameter norms over all layers and globally for detailed monitoring
         layer_param_norm = jax.tree_map(jnp.linalg.norm, new_state.params)
         logs["layer_param_norm"] = layer_param_norm
         logs["param_norm"] = jnp.linalg.norm(jax.tree_util.tree_leaves(layer_param_norm))
@@ -1185,10 +1185,6 @@ def main():
             eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
             eval_metrics = to_fp32(eval_metrics)
 
-            # compute WER metric and get predicted string (for debugging)
-            wer_desc = ""
-            pred_str = []
-            label_str = []
 
             # always run compute metrics
             wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
