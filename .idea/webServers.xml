@@ -3,7 +3,7 @@
   <component name="WebServers">
     <option name="servers">
       <webServer id="58bbff6e-f818-4017-919d-2c2db4b2c28e" name="tpu-1">
-        <fileTransfer accessType="SFTP" host="34.90.116.77" port="22" sshConfigId="bb8d8741-1c86-480a-81d0-ad83dc02ca1d" sshConfig="tpu-1" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.90.3.255" port="22" sshConfigId="bb8d8741-1c86-480a-81d0-ad83dc02ca1d" sshConfig="tpu-1" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
