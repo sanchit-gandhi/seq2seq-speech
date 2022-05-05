@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-#	--model_name_or_path="/home/patrick_huggingface_co/flax-wav2vec2-large-lv60-scan" \
 python ./run_flax_speech_recognition_ctc.py \
-	--model_name_or_path="./train_clean_100" \
+	--model_name_or_path="/home/patrick_huggingface_co/flax-wav2vec2-large-lv60-scan" \
 	--dataset_name="librispeech_asr" \
 	--dataset_cache_dir="/mnt/disks/persist" \
 	--text_column="text" \
