@@ -745,7 +745,7 @@ def main():
 
     # if not training, there is no need to run multiple epochs
     if not training_args.do_train:
-        training_args.num_epochs = 1
+        training_args.num_train_epochs = 1
 
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
