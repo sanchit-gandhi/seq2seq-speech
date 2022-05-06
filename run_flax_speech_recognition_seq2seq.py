@@ -236,9 +236,7 @@ class DataTrainingArguments:
     )
     test_split_name: str = field(
         default="test",
-        metadata={
-            "help": "The name of the test data set split to use (via the datasets library). Defaults to 'test'"
-        },
+        metadata={"help": "The name of the test data set split to use (via the datasets library). Defaults to 'test'"},
     )
     do_lower_case: bool = field(
         default=True,
@@ -254,7 +252,9 @@ class DataTrainingArguments:
     )
     log_first_ids: bool = field(
         default=True,
-        metadata={"help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."}
+        metadata={
+            "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
+        },
     )
 
 
@@ -278,27 +278,33 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
             "One of `['highest', 'float32', 'high', 'bfloat16_3x', 'default', 'bfloat16', 'fastest', None]`."
         },
     )
-    multisteps: bool = field(
-        default=False,
+    generation_length_penalty: float = field(
+        default=1,
         metadata={
-            "help": "Whether to use Optax MultiSteps for gradient accumulation. If `False` (default) and `gradient_accumulation_steps > 1`, "
-            "a custom gradient accumulation implementation will be employed."
+            "help": "Exponential penalty to the length. 1.0 (default) means no penalty. Set to values < 1.0 in order to encourage the model"
+            "to generate shorter sequences, to a value > 1.0 in order to encourage the model to produce longer sequences."
         },
     )
     final_generation_max_length: int = field(
         default=None,
         metadata={
-            "help": "The `max_length` to use on each evaluation loop when `predict_with_generate=True`. Will default "
+            "help": "The `max_length` to use on each evaluation loop when `predict_with_generate=True`. If unspecified, will default "
             "to the `max_length` value of the model configuration."
         },
     )
     final_generation_num_beams: int = field(
         default=None,
         metadata={
-            "help": "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. Will default "
+            "help": "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. If unspecified, ill default "
             "to the `num_beams` value of the model configuration."
         },
     )
+
+    def __post_init__(self):
+        if self.final_generation_max_length is None:
+            self.final_generation_max_length = self.generation_max_length
+        if self.final_generation_num_beams is None:
+            self.final_generation_num_beams = self.generation_num_beams
 
 
 def to_fp32(t):
@@ -383,7 +389,7 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
     def create(cls, *, apply_fn, params, tx, to_dtype, **kwargs):
         """Creates a new instance with `step=0` and initialized `opt_state`."""
         # downcast optimizer state to bf16 if mixed-precision training
-        opt_state = tx.init(to_dtype(params))
+        opt_state = tx.init(to_dtype(params)) if tx is not None else None
         return cls(
             step=0,
             apply_fn=apply_fn,
@@ -395,6 +401,20 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
 
     def replicate(self):
         return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
+
+
+
+def numpy_fillna(data, tokenizer):
+    # Get lengths of each row of data
+    lens = np.array([len(i) for i in data])
+
+    # Mask of valid places in each row
+    mask = np.arange(lens.max()) < lens[:, None]
+
+    # Setup output array and put elements from data into masked positions
+    out = np.ones_like(mask, dtype=data.dtype) * tokenizer.pad_token_id
+    out[mask] = np.concatenate(data)
+    return out
 
 
 def shift_tokens_right(label_ids: np.array, decoder_start_token_id: int) -> np.ndarray:
@@ -614,17 +634,18 @@ def write_wandb_pred(pred_str, label_str, eval_ids, epoch, step, prefix="eval", 
         for id in top_ids:
             if id in eval_ids:
                 idx = eval_ids.index(id)
-                str_data.append(
-                    [eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)])
+                str_data.append([eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)])
         columns = ["id", "label_str"] + [f"beam_{i + 1}" for i in range(num_beams)]
         wandb.log(
-            {f"{prefix}/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data[:50])}, step,
+            {f"{prefix}/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data[:50])},
+            step,
         )
         if final_step:
             str_data = np.array(str_data)
             wandb.log(
                 {f"{prefix}/epoch_{epoch + 1}_incorrect": wandb.Table(columns=columns, data=str_data[:200000])}, step
             )
+
 
 def create_learning_rate_fn(
     train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
@@ -725,6 +746,16 @@ def main():
                 cache_dir=data_args.dataset_cache_dir,
             )
 
+    if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
+        raise ValueError(
+            "Cannot not train, not do evaluation and not do prediction. At least one of "
+            "training, evaluation or prediction has to be done."
+        )
+
+    # if not training, there is no need to run multiple epochs
+    if not training_args.do_train:
+        training_args.num_train_epochs = 1
+
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
             f"--audio_column_name '{data_args.audio_column_name}' not found in dataset '{data_args.dataset_name}'. "
@@ -738,6 +769,7 @@ def main():
             "Make sure to set `--text_column_name` to the correct text column - one of "
             f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
         )
+
     if data_args.id_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
             f"--id_column_name {data_args.id_column_name} not found in dataset '{data_args.dataset_name}'. "
@@ -780,10 +812,10 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
-    if training_args.precision == 'full_mixed':
+    if training_args.precision == "full_mixed":
         dtype = jnp.bfloat16
         training_args.mixed_precision = True
-    elif training_args.precision == 'half_mixed':
+    elif training_args.precision == "half_mixed":
         dtype = jnp.bfloat16
         training_args.mixed_precision = False
     else:
@@ -804,8 +836,8 @@ def main():
 
     # 6. Resample speech dataset ALWAYS
     raw_datasets = raw_datasets.cast_column(
-            data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
-        )
+        data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
+    )
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -822,13 +854,13 @@ def main():
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
 
-    if data_args.max_train_samples is not None:
+    if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
 
-    if data_args.max_eval_samples is not None:
+    if training_args.do_eval and data_args.max_eval_samples is not None:
         raw_datasets["eval"] = raw_datasets["eval"].select(range(data_args.max_eval_samples))
 
-    if data_args.max_test_samples is not None:
+    if training_args.do_predict and data_args.max_test_samples is not None:
         for split in test_split:
             raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
 
@@ -847,13 +879,12 @@ def main():
         batch["labels_length"] = len(batch["labels"])
         return batch
 
-    with training_args.main_process_first(desc="dataset map pre-processing"):
-        vectorized_datasets = raw_datasets.map(
-            prepare_dataset,
-            remove_columns=next(iter(raw_datasets.values())).column_names,
-            num_proc=data_args.preprocessing_num_workers,
-            desc="preprocess train dataset",
-        )
+    vectorized_datasets = raw_datasets.map(
+        prepare_dataset,
+        remove_columns=next(iter(raw_datasets.values())).column_names,
+        num_proc=data_args.preprocessing_num_workers,
+        desc="preprocess train dataset",
+    )
 
     # filter data with inputs shorter than min_input_length or longer than max_input_length
     def is_audio_in_length_range(length):
@@ -889,6 +920,8 @@ def main():
     metric = load_metric("wer")
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
+        label_ids = numpy_fillna(np.array(label_ids, dtype='object'), tokenizer)
+
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(padded_ids, skip_special_tokens=True)
@@ -896,18 +929,19 @@ def main():
         pred_ids = np.array(pred_ids)
         num_beams = pred_ids.shape[1]
         # decode on a beam-by-beam basis
-        pred_str = [tokenizer.batch_decode(pred_ids[:, beam, :], skip_special_tokens=True) for beam in reversed(range(num_beams))]
+        pred_str = [
+            tokenizer.batch_decode(pred_ids[:, beam, :], skip_special_tokens=True)
+            for beam in reversed(range(num_beams))
+        ]
         # compute wer for top beam
         wer = metric.compute(predictions=pred_str[0], references=label_str)
 
         return {"wer": wer}, pred_str, label_str
 
-    # 9. Create a single speech processor
-    if is_main_process(training_args.local_rank):
-        # save feature extractor, tokenizer and config
-        feature_extractor.save_pretrained(training_args.output_dir)
-        tokenizer.save_pretrained(training_args.output_dir)
-        config.save_pretrained(training_args.output_dir)
+    # 9. Save feature extractor, tokenizer and config
+    feature_extractor.save_pretrained(training_args.output_dir)
+    tokenizer.save_pretrained(training_args.output_dir)
+    config.save_pretrained(training_args.output_dir)
 
     processor = AutoProcessor.from_pretrained(training_args.output_dir)
 
@@ -915,7 +949,7 @@ def main():
         processor=processor,
         decoder_start_token_id=model.config.decoder_start_token_id,
         input_padding="longest",
-        target_padding="max_length",
+        target_padding="longest",
         max_target_length=max_target_length,
         pad_input_to_multiple_of=pad_input_to_multiple_of,
         pad_target_to_multiple_of=pad_target_to_multiple_of,
@@ -959,58 +993,60 @@ def main():
     train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count()
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
-    num_train_samples = len(vectorized_datasets["train"])
-    steps_per_epoch = num_train_samples // batch_size_per_update
-    total_train_steps = steps_per_epoch * num_epochs
     to_dtype = to_bf16 if training_args.mixed_precision else to_fp32
 
-    # Create learning rate schedule
-    linear_decay_lr_schedule_fn = create_learning_rate_fn(
-        len(vectorized_datasets["train"]),
-        batch_size_per_update,
-        training_args.num_train_epochs,
-        training_args.warmup_steps,
-        training_args.learning_rate,
-    )
+    if training_args.do_train:
+        num_train_samples = len(vectorized_datasets["train"])
+        steps_per_epoch = num_train_samples // batch_size_per_update
+        total_train_steps = steps_per_epoch * num_epochs
 
-    # We use Optax's "masking" functionality to not apply weight decay
-    # to bias and LayerNorm scale parameters. decay_mask_fn returns a
-    # mask boolean with the same structure as the parameters.
-    # The mask is True for parameters that should be decayed.
-    # Note that this mask is specifically adapted for FlaxWav2Vec2 and FlaxBart.
-    # For FlaxT5, one should correct the layer norm parameter naming
-    # accordingly - see `run_t5_mlm_flax.py` e.g.
-    def decay_mask_fn(params):
-        flat_params = traverse_util.flatten_dict(params)
-        layer_norm_params = [
-            (name, "scale")
-            for name in ["layer_norm", "self_attn_layer_norm", "layernorm_embedding", "final_layer_norm"]
-        ]
-        flat_mask = {path: (path[-1] != "bias" and path[-2:] not in layer_norm_params) for path in flat_params}
-        return traverse_util.unflatten_dict(flat_mask)
-
-    if training_args.adafactor:
-        # Create Adafactor optimizer
-        optim = optax.adafactor(
-            learning_rate=linear_decay_lr_schedule_fn,
-            dtype_momentum=jnp.bfloat16 if training_args.mixed_precision else jnp.float32,
-            weight_decay_rate=training_args.weight_decay,
-            weight_decay_mask=decay_mask_fn,
+        # Create learning rate schedule
+        linear_decay_lr_schedule_fn = create_learning_rate_fn(
+            len(vectorized_datasets["train"]),
+            batch_size_per_update,
+            training_args.num_train_epochs,
+            training_args.warmup_steps,
+            training_args.learning_rate,
         )
+
+        # We use Optax's "masking" functionality to not apply weight decay
+        # to bias and LayerNorm scale parameters. decay_mask_fn returns a
+        # mask boolean with the same structure as the parameters.
+        # The mask is True for parameters that should be decayed.
+        # Note that this mask is specifically adapted for FlaxWav2Vec2 and FlaxBart.
+        # For FlaxT5, one should correct the layer norm parameter naming
+        # accordingly - see `run_t5_mlm_flax.py` e.g.
+        def decay_mask_fn(params):
+            flat_params = traverse_util.flatten_dict(params)
+            layer_norm_params = [
+                (name, "scale")
+                for name in ["layer_norm", "self_attn_layer_norm", "layernorm_embedding", "final_layer_norm"]
+            ]
+            flat_mask = {path: (path[-1] != "bias" and path[-2:] not in layer_norm_params) for path in flat_params}
+            return traverse_util.unflatten_dict(flat_mask)
+
+        if training_args.adafactor:
+            # Create Adafactor optimizer
+            optim = optax.adafactor(
+                learning_rate=linear_decay_lr_schedule_fn,
+                dtype_momentum=jnp.bfloat16 if training_args.mixed_precision else jnp.float32,
+                weight_decay_rate=training_args.weight_decay,
+                weight_decay_mask=decay_mask_fn,
+            )
+        else:
+            # Create AdamW optimizer
+            optim = optax.adamw(
+                learning_rate=linear_decay_lr_schedule_fn,
+                b1=training_args.adam_beta1,
+                b2=training_args.adam_beta2,
+                eps=training_args.adam_epsilon,
+                weight_decay=training_args.weight_decay,
+                mask=decay_mask_fn,
+            )
     else:
-        # Create AdamW optimizer
-        optim = optax.adamw(
-            learning_rate=linear_decay_lr_schedule_fn,
-            b1=training_args.adam_beta1,
-            b2=training_args.adam_beta2,
-            eps=training_args.adam_epsilon,
-            weight_decay=training_args.weight_decay,
-            mask=decay_mask_fn,
-        )
-
-    # Optax MultiSteps for gradient accumulation. We'll only call this optimizer transformation if gradient accumulation is required (i.e. gradient accumulation steps > 1)
-    if training_args.multisteps and gradient_accumulation_steps > 1:
-        optim = optax.MultiSteps(optim, gradient_accumulation_steps, use_grad_mean=False)
+        total_train_steps = 0
+        num_train_samples = 0
+        optim = None
 
     # Setup train state
     state = MixedPrecisionTrainState.create(
@@ -1131,9 +1167,16 @@ def main():
         return metrics
 
     # Define generation function
-    gen_kwargs = {"max_length": training_args.generation_max_length, "num_beams": training_args.generation_num_beams}
-    final_gen_kwargs = {"max_length": training_args.final_generation_max_length if training_args.final_generation_max_length is not None else training_args.generation_max_length,
-                       "num_beams": training_args.final_generation_num_beams if training_args.final_generation_num_beams is not None else training_args.generation_num_beams}
+    gen_kwargs = {
+        "max_length": training_args.generation_max_length,
+        "num_beams": training_args.generation_num_beams,
+        "length_penalty": training_args.generation_length_penalty,
+    }
+    final_gen_kwargs = {
+        "max_length": training_args.final_generation_max_length,
+        "num_beams": training_args.final_generation_num_beams,
+        "length_penalty": training_args.generation_length_penalty,
+    }
 
     def generate_step(params, batch):
         model.params = params
@@ -1155,7 +1198,7 @@ def main():
     state = state.replicate()
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(vectorized_datasets['train'])}")
+    logger.info(f"  Num examples = {num_train_samples}")
     logger.info(f"  Num Epochs = {num_epochs}")
     logger.info(f"  Instantaneous batch size per device = {training_args.per_device_train_batch_size}")
     logger.info(f"  Num gradient accumulation steps = {gradient_accumulation_steps}")
@@ -1165,110 +1208,126 @@ def main():
     logger.info(f"  Use scan: {config.encoder.use_scan}")
     logger.info(f"  Fuse matmuls: {config.encoder.fuse_matmuls}")
 
-    train_time = 0
+    train_time = cur_step = 0
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
     for epoch in epochs:
-        # ======================== Training ================================
-        train_start = time.time()
+        if training_args.do_train:
+            # ======================== Training ================================
+            train_start = time.time()
 
-        # Create sampling rng
-        rng, input_rng = jax.random.split(rng)
+            # Create sampling rng
+            rng, input_rng = jax.random.split(rng)
 
-        # Generate an epoch by randomly shuffling sampling indices from the train dataset and grouping by length
-        train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
-        train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
+            # Generate an epoch by randomly shuffling sampling indices from the train dataset and grouping by length
+            train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
+            train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
 
-        # Gather the indices for creating the batch and do a training step
-        for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
-            samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
-            batch = data_collator(samples)
-            batch.pop("input_ids")
-            batch = shard(batch.data)
-            state, train_metric = p_train_step(state, batch)
+            # Gather the indices for creating the batch and do a training step
+            for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
+                samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
+                batch = data_collator(samples)
+                batch.pop("input_ids")
+                batch = shard(batch.data)
+                state, train_metric = p_train_step(state, batch)
 
-            cur_step = epoch * (num_train_samples // batch_size_per_update) + step
+                cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
-            if cur_step % training_args.logging_steps == 0 and cur_step > 0:
-                # Save metrics
-                train_metric = unreplicate(train_metric)
-                train_time += time.time() - train_start
-                # need to upcast all device arrays to fp32 for wandb logging (jnp.bfloat16 not supported) -> do this here OR in train_step
-                write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
-                # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
-                # if has_tensorboard and jax.process_index() == 0:
-                # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
+                if cur_step % training_args.logging_steps == 0 and cur_step > 0:
+                    # Save metrics
+                    train_metric = unreplicate(train_metric)
+                    train_time += time.time() - train_start
+                    # need to upcast all device arrays to fp32 for wandb logging (jnp.bfloat16 not supported) -> do this here OR in train_step
+                    write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
+                    # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
+                    # if has_tensorboard and jax.process_index() == 0:
+                    # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
 
-                epochs.write(
-                    f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
-                )
+                    epochs.write(
+                        f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
+                    )
 
-        # ======================== Evaluating ==============================
-        eval_metrics = []
-        eval_preds = []
-        eval_ids = []
-        eval_labels = []
+        if training_args.do_eval:
+            # ======================== Evaluating ==============================
+            eval_metrics = []
+            eval_preds = []
+            eval_ids = []
+            eval_labels = []
 
-        # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
-        eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
-        eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+            # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
+            eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
+            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
 
-        for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
-            samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
-            batch = data_collator(samples)
-            eval_ids.extend(batch.pop("input_ids"))
-            batch = shard(batch.data)
-            labels = batch["labels"]
+            for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
+                samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
+                batch = data_collator(samples)
+                eval_ids.extend(batch.pop("input_ids"))
+                batch = shard(batch.data)
+                labels = batch["labels"]
 
-            metrics = p_eval_step(state.params, batch)
-            eval_metrics.append(metrics)
+                metrics = p_eval_step(state.params, batch)
+                eval_metrics.append(metrics)
 
-            # generation
+                # generation
+                if training_args.predict_with_generate:
+                    final_step = (epoch + 1) == num_epochs
+                    if not final_step:
+                        generated_ids = p_generate_step(state.params, batch)
+                        eval_preds.extend(
+                            jax.device_get(generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"]))
+                        )
+                    else:
+                        generated_ids = p_final_generate_step(state.params, batch)
+                        eval_preds.extend(
+                            jax.device_get(
+                                generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
+                            )
+                        )
+                    eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+
+            # normalize eval metrics
+            eval_metrics = get_metrics(eval_metrics)
+            eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+            eval_metrics = to_fp32(eval_metrics)
+
+            # compute WER metric and get predicted string (for debugging)
+            wer_desc = ""
+            pred_str = []
+            label_str = []
             if training_args.predict_with_generate:
-                final_step = (epoch + 1) == num_epochs
-                if not final_step:
-                    generated_ids = p_generate_step(state.params, batch)
-                    eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"])))
-                else:
-                    generated_ids = p_final_generate_step(state.params, batch)
-                    eval_preds.extend(jax.device_get(generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])))
-                eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+                wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
+                eval_metrics.update(wer_metric)
+                wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
 
-        # normalize eval metrics
-        eval_metrics = get_metrics(eval_metrics)
-        eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
-        eval_metrics = to_fp32(eval_metrics)
+            # Print metrics and update progress bar
+            desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            epochs.write(desc)
+            epochs.desc = desc
 
-        # compute WER metric and get predicted string (for debugging)
-        wer_desc = ""
-        pred_str = []
-        label_str = []
-        if training_args.predict_with_generate:
-            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
-            eval_metrics.update(wer_metric)
-            wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
-
-        # Print metrics and update progress bar
-        desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
-        epochs.write(desc)
-        epochs.desc = desc
-
-        # Save metrics
-        write_wandb_log(eval_metrics, cur_step, prefix="eval")
-        write_wandb_pred(pred_str, label_str, eval_ids, epoch, cur_step, top_ids=vectorized_datasets["eval"]["input_id"] if data_args.log_first_ids else None, final_step=final_step)
-        # if has_tensorboard and jax.process_index() == 0:
-        # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+            # Save metrics
+            write_wandb_log(eval_metrics, cur_step, prefix="eval")
+            write_wandb_pred(
+                pred_str,
+                label_str,
+                eval_ids,
+                epoch,
+                cur_step,
+                top_ids=vectorized_datasets["eval"]["input_id"] if data_args.log_first_ids else None,
+                final_step=final_step,
+            )
+            # if has_tensorboard and jax.process_index() == 0:
+            # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
         # save checkpoint after each epoch and push checkpoint to the hub
         if jax.process_index() == 0:
             params = jax.device_get(jax.tree_map(lambda x: x[0], state.params))
-            model.save_pretrained(training_args.output_dir, params=params)
-            tokenizer.save_pretrained(training_args.output_dir)
+            model.save_pretrained(training_args.output_dir + "/" + wandb.run.name, params=params)
+            tokenizer.save_pretrained(training_args.output_dir + "/" + wandb.run.name)
             if training_args.push_to_hub:
                 repo.push_to_hub(commit_message=f"Saving weights and logs of epoch {epoch}", blocking=False)
 
-    # ======================== Prediction ==============================
     if training_args.do_predict:
-        for step_offset, split in enumerate(test_split, 1):
+        # ======================== Prediction ==============================
+        for split in test_split:
             pred_metrics = []
             pred_generations = []
             pred_ids = []
@@ -1291,7 +1350,11 @@ def main():
                 # generation
                 if training_args.predict_with_generate:
                     generated_ids = p_final_generate_step(state.params, batch)
-                    pred_generations.extend(jax.device_get(generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])))
+                    pred_generations.extend(
+                        jax.device_get(
+                            generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
+                        )
+                    )
                     pred_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
 
             # normalize eval metrics
@@ -1315,8 +1378,17 @@ def main():
 
             # Save metrics
             write_wandb_log(pred_metrics, cur_step, prefix=split)
-            write_wandb_pred(pred_str, label_str, pred_ids, epoch, cur_step, prefix=split,
-                             top_ids=vectorized_datasets[split]["input_id"] if data_args.log_first_ids else None, final_step=True)
+            write_wandb_pred(
+                pred_str,
+                label_str,
+                pred_ids,
+                epoch,
+                cur_step,
+                prefix=split,
+                top_ids=vectorized_datasets[split]["input_id"] if data_args.log_first_ids else None,
+                final_step=True,
+            )
+
 
 if __name__ == "__main__":
     main()

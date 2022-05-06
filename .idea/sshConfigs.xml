@@ -17,6 +17,9 @@
       <sshConfig host="35.204.237.183" id="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="tpu-5" nameFormat="CUSTOM" username="sanchitgandhi" useOpenSSHConfig="true">
         <option name="customName" value="tpu-5" />
       </sshConfig>
+      <sshConfig host="34.91.183.220" id="4b5e0687-8532-48b2-ab54-47cf488b8282" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="patrick-tpu" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
+        <option name="customName" value="patrick-tpu" />
+      </sshConfig>
     </configs>
   </component>
 </project>
