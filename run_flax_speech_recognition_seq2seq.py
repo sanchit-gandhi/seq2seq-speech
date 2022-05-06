@@ -210,7 +210,8 @@ class DataTrainingArguments:
         default=None,
         metadata={
             "help": "If set will pad the target sequence to a multiple of the provided value. "
-            "This is important to avoid triggering recompilations on TPU."
+            "This is important to avoid triggering recompilations on TPU. If unspecified, will default to `max_target_length`, "
+            " the equivalent of padding the targets to max length."
         },
     )
     preprocessing_only: bool = field(
@@ -256,6 +257,9 @@ class DataTrainingArguments:
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
     )
+    def __post_init__(self):
+        if self.pad_target_to_multiple_of is None:
+            self.pad_target_to_multiple_of = self.max_target_length
 
 
 # @flax.struct.dataclass
@@ -295,7 +299,7 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
     final_generation_num_beams: int = field(
         default=None,
         metadata={
-            "help": "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. If unspecified, ill default "
+            "help": "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. If unspecified, will default "
             "to the `num_beams` value of the model configuration."
         },
     )
@@ -404,7 +408,7 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
 
 
 
-def numpy_fillna(data, tokenizer):
+def pad_to_max_length(data, tokenizer):
     # Get lengths of each row of data
     lens = np.array([len(i) for i in data])
 
@@ -920,7 +924,7 @@ def main():
     metric = load_metric("wer")
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
-        label_ids = numpy_fillna(np.array(label_ids, dtype='object'), tokenizer)
+        label_ids = pad_to_max_length(np.array(label_ids, dtype='object'), tokenizer)
 
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
         # we do not want to group tokens when computing the metrics
