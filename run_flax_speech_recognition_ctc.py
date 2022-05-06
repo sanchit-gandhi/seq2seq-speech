@@ -1151,8 +1151,8 @@ def main():
                     # need to upcast all device arrays to fp32 for wandb logging (jnp.bfloat16 not supported) -> do this here OR in train_step
                     write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
                     # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
-                    if has_tensorboard and jax.process_index() == 0:
-                        write_train_metric(summary_writer, train_metrics, train_time, cur_step)
+                    # if has_tensorboard and jax.process_index() == 0:
+                        # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
 
                     epochs.write(
                         f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
