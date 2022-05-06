@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="transformers-testing" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="patrick-tpu">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="special">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchitgandhi/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="tpu-1">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchitgandhi/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="tpu-2">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchitgandhi/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="tpu-3">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchitgandhi/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="tpu-4">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchitgandhi/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="tpu-5">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchitgandhi/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="transformers-testing">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
