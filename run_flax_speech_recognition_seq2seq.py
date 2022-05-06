@@ -956,7 +956,7 @@ def main():
         target_padding="longest",
         max_target_length=max_target_length,
         pad_input_to_multiple_of=pad_input_to_multiple_of,
-        pad_target_to_multiple_of=pad_target_to_multiple_of
+        pad_target_to_multiple_of=pad_target_to_multiple_of,
     )
 
     # Enable tensorboard only on the master node
