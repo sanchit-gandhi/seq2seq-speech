@@ -170,6 +170,13 @@ class DataTrainingArguments:
     min_duration_in_seconds: float = field(
         default=0.0, metadata={"help": "Filter audio files that are shorter than `min_duration_in_seconds` seconds"}
     )
+    max_label_length: Optional[int] = field(
+        default=512,
+        metadata={
+            "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
+            "than this will be filtered."
+        },
+    )
     min_target_length: Optional[int] = field(
         default=0,
         metadata={
@@ -223,6 +230,10 @@ class DataTrainingArguments:
     wandb_job_type: str = field(
         default="CTC",
         metadata={"help": "The name of the wandb job type."},
+    )
+    test_split_name: str = field(
+        default="test",
+        metadata={"help": "The name of the test data set split to use (via the datasets library). Defaults to 'test'"},
     )
 
 
@@ -533,13 +544,13 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, epoch, num_log=50):
+def write_wandb_pred(pred_str, label_str, epoch, step, num_log=50, prefix="eval"):
     if jax.process_index() == 0:
         # convert str data to a wandb compatible format
         str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
         # we'll log the first 50 predictions for each epoch
         wandb.log(
-            {f"predictions/epoch_{epoch + 1}": wandb.Table(columns=["label_str", "pred_str"], data=str_data[:num_log])}
+            {f"{prefix}/epoch_{epoch + 1}": wandb.Table(columns=["label_str", "pred_str"], data=str_data[:num_log])}, step,
         )
 
 
@@ -737,10 +748,20 @@ def main():
             cache_dir=data_args.dataset_cache_dir,
         )
 
-    if not training_args.do_train and not training_args.do_eval:
+    if training_args.do_predict:
+        test_split = data_args.test_split_name.split("+")
+        for split in test_split:
+            raw_datasets[split] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=split,
+                cache_dir=data_args.dataset_cache_dir,
+            )
+
+    if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
         raise ValueError(
-            "Cannot not train and not do evaluation. At least one of "
-            "training or evaluation has to be done."
+            "Cannot not train, not do evaluation and not do prediction. At least one of "
+            "training, evaluation or prediction has to be done."
         )
 
     # if not training, there is no need to run multiple epochs
@@ -834,6 +855,10 @@ def main():
     if training_args.do_eval and data_args.max_eval_samples is not None:
         raw_datasets["eval"] = raw_datasets["eval"].select(range(data_args.max_eval_samples))
 
+    if training_args.do_predict and data_args.max_test_samples is not None:
+        for split in test_split:
+            raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
+
     def prepare_dataset(batch):
         # process audio
         sample = batch[audio_column_name]
@@ -900,7 +925,7 @@ def main():
         processor=processor,
         input_padding="longest",
         pad_input_to_multiple_of=pad_input_to_multiple_of,
-        max_label_length=512,  # TODO(PVP, Sanchit) - to check here
+        max_label_length=data_args.max_label_length,
     )
 
     # Enable tensorboard only on the master node
@@ -1185,7 +1210,6 @@ def main():
             eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
             eval_metrics = to_fp32(eval_metrics)
 
-
             # always run compute metrics
             wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
             eval_metrics.update(wer_metric)
@@ -1209,6 +1233,50 @@ def main():
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
                 repo.push_to_hub(commit_message=f"Saving weights and logs of epoch {epoch}", blocking=False)
+
+    if training_args.do_predict:
+        for split in test_split:
+            # ======================== Evaluating ==============================
+            eval_metrics = []
+            eval_preds = []
+            eval_labels = []
+
+            # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
+            eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
+            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+
+            for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc=f"Predicting {split}...", position=2)):
+                samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
+                batch = data_collator(samples)
+                batch = shard(batch.data)
+                labels = batch["labels"]
+
+                metrics, pred_ids = p_eval_step(state.params, batch)
+                eval_preds.extend(jax.device_get(pred_ids.reshape(-1, pred_ids.shape[-1])))
+                eval_metrics.append(metrics)
+
+                eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+
+            # normalize eval metrics
+            eval_metrics = get_metrics(eval_metrics)
+            eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+            eval_metrics = to_fp32(eval_metrics)
+
+            # always run compute metrics
+            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
+            eval_metrics.update(wer_metric)
+            wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
+
+            # Print metrics and update progress bar
+            desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            epochs.write(desc)
+            epochs.desc = desc
+
+            # Save metrics
+            write_wandb_log(eval_metrics, cur_step, prefix=split)
+            write_wandb_pred(pred_str, label_str, epoch, cur_step, prefix=split)
+            if has_tensorboard and jax.process_index() == 0:
+                write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
 
 if __name__ == "__main__":
