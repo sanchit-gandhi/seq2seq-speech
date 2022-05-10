@@ -806,13 +806,12 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    do_lower_case = data_args.do_lower_case
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
-        do_lower_case=do_lower_case,
+        do_lower_case=False,
     )
 
     if training_args.precision == 'full_mixed':
@@ -848,6 +847,7 @@ def main():
     num_workers = data_args.preprocessing_num_workers
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
+    do_lower_case = data_args.do_lower_case
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
