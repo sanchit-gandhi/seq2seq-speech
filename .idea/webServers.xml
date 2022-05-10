@@ -70,6 +70,7 @@
           <name value="tpu-4" />
           <name value="tpu-5" />
           <name value="transformers-testing" />
+          <name value="patrick-tpu" />
         </servers>
       </group>
     </groups>

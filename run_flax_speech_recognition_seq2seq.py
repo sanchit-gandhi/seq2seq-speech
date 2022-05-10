@@ -200,7 +200,7 @@ class DataTrainingArguments:
         },
     )
     pad_input_to_multiple_of: Optional[int] = field(
-        default=32000,
+        default=24000,
         metadata={
             "help": "If set will pad the input sequence to a multiple of the provided value. "
             "This is important to avoid triggering recompilations on TPU."
@@ -246,6 +246,10 @@ class DataTrainingArguments:
     wandb_project: str = field(
         default="flax-speech-recognition-seq2seq",
         metadata={"help": "The name of the wandb project."},
+    )
+    wandb_name: str = field(
+        default=None,
+        metadata={"help": "The name of the wandb run."},
     )
     wandb_job_type: str = field(
         default="Seq2Seq",
@@ -650,11 +654,9 @@ def write_wandb_pred(pred_str, label_str, eval_ids, step, prefix="eval", top_ids
 
 
 def create_learning_rate_fn(
-    train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
+    num_train_steps: int, num_warmup_steps: int, learning_rate: float
 ) -> Callable[[int], jnp.array]:
     """Returns a linear warmup, linear_decay learning rate function."""
-    steps_per_epoch = train_ds_size // train_batch_size
-    num_train_steps = steps_per_epoch * num_train_epochs
     warmup_fn = optax.linear_schedule(init_value=0.0, end_value=learning_rate, transition_steps=num_warmup_steps)
     decay_fn = optax.linear_schedule(
         init_value=learning_rate, end_value=0, transition_steps=num_train_steps - num_warmup_steps
@@ -696,7 +698,7 @@ def main():
 
     # Set up wandb run
     if jax.process_index() == 0:
-        wandb.init(project=data_args.wandb_project, job_type=data_args.wandb_job_type)
+        wandb.init(project=data_args.wandb_project, name=data_args.wandb_name, job_type=data_args.wandb_job_type)
 
     logger.info("Training/evaluation parameters %s", training_args)
 
@@ -1012,9 +1014,7 @@ def main():
 
         # Create learning rate schedule
         linear_decay_lr_schedule_fn = create_learning_rate_fn(
-            len(vectorized_datasets["train"]),
-            batch_size_per_update,
-            training_args.num_train_epochs,
+            total_train_steps,
             training_args.warmup_steps,
             training_args.learning_rate,
         )
@@ -1200,10 +1200,15 @@ def main():
         return output_ids.sequences
 
     # Create parallel version of the train and eval step
-    p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
-    p_eval_step = jax.pmap(eval_step, "batch")
-    p_generate_step = jax.pmap(generate_step, "batch")
-    p_final_generate_step = jax.pmap(final_generate_step, "batch")
+    if training_args.do_train:
+        p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
+
+    if training_args.do_eval or training_args.do_predict:
+        p_eval_step = jax.pmap(eval_step, "batch")
+
+    if training_args.predict_with_generate:
+        p_generate_step = jax.pmap(generate_step, "batch")
+        p_final_generate_step = jax.pmap(final_generate_step, "batch")
 
     def run_evaluation(final_step=False):
         if training_args.do_eval:
@@ -1313,7 +1318,7 @@ def main():
             train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
 
             # Gather the indices for creating the batch and do a training step
-            for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
+            for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1), 1):
                 samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
                 batch = data_collator(samples)
                 batch.pop("input_ids")
@@ -1322,7 +1327,7 @@ def main():
 
                 cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
-                if cur_step % training_args.logging_steps == 0 and cur_step > 0:
+                if cur_step % training_args.logging_steps == 0:
                     # Save metrics
                     train_metric = unreplicate(train_metric)
                     train_time += time.time() - train_start
@@ -1336,16 +1341,17 @@ def main():
                         f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
                     )
 
-                if cur_step % total_train_steps == 0 and cur_step > 0:
+                if cur_step % total_train_steps == 0:
                     break
 
-                if cur_step % training_args.save_steps == 0 and cur_step > 0:
+                if cur_step % training_args.eval_steps == 0:
+                    run_evaluation(final_step=False)
+
+                if cur_step % training_args.save_steps == 0:
                     save_checkpoint()
 
-                if cur_step % training_args.eval_steps == 0 and cur_step > 0:
-                    run_evaluation()
-
-    save_checkpoint()
+    if training_args.do_train:
+        save_checkpoint()
 
     if training_args.do_eval:
         run_evaluation(final_step=True)
