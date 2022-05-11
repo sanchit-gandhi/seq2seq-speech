@@ -811,8 +811,13 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
-        do_lower_case=False,
     )
+
+    if tokenizer.do_lower_case and data_args.dataset_name != "librispeech_asr":
+        raise ValueError("Setting the tokenizer attribute `do_lower_case` to `True` converts all input strings to "
+        "uppercase prior to tokenization. This should only be done when the tokenizer is built on an uppercased corpus,"
+        "i.e. for the dataset `librispeech_asr` only. If your dataset is not `librispeech_asr`, the tokenizer is mostly likely "
+        "built on an lowercased corpus. In this case, set `tokenizer.do_lower_case` to ``False`.")
 
     if training_args.precision == 'full_mixed':
         dtype = jnp.bfloat16

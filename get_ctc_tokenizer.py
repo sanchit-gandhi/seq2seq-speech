@@ -18,12 +18,15 @@ use_auth_token = True
 text_column = "sentence"
 # name of tok to upload to the Hub
 tokenizer_name = "wav2vec2_ctc_cv9_tokenizer"
+# dataset cache directory
+dataset_cache_dir = "/home/sanchitgandhi/cache"
 
 dataset = load_dataset(
     dataset_name,
     dataset_config,
     split=split,
     use_auth_token=use_auth_token,
+    cache_dir=dataset_cache_dir
 )
 
 # remove all data that is unnecessary to save RAM
@@ -31,12 +34,16 @@ dataset = dataset.remove_columns(list(set(dataset.column_names) - set([text_colu
 
 
 # define function to see stats about letters and to create vocab
-def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, cutoff_freq=0.0):
+def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, cutoff_freq=0.0):
     def extract_all_chars(batch):
         all_text = " ".join(batch[text_column])
 
+        if do_lower and do_upper:
+            raise ValueError("Cannot do uppercase and lowercase tokenization concurrently. Set at most one of `do_lower` or `do_upper` to `True`.")
         if do_lower:
             all_text = all_text.lower()
+        if do_upper:
+            all_text = all_text.upper()
 
         count_chars_dict = Counter(list(all_text))
         # sort by freq
@@ -256,16 +263,17 @@ Total characters in dataset: 57415071
 # accentuated letters from German or French, Chinese letters, ...
 # Running it once more and now keeping the dict
 do_lower = True
+do_upper = False
 cutoff_freq = 0.01
 
-vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, cutoff_freq=cutoff_freq)
+vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, cutoff_freq=cutoff_freq)
 
 # save vocab dict to be loaded into tokenizer
 with tempfile.TemporaryDirectory() as tmp:
     with open(os.path.join(tmp, "vocab.json"), "w") as file:
         json.dump(vocab_dict, file)
 
-    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(tmp)
+    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(tmp, do_lower_case=do_upper)
 
 # push tokenizer to the Hub
 # E.g. see: https://huggingface.co/patrickvonplaten/wav2vec2_ctc_cv9_tokenizer
