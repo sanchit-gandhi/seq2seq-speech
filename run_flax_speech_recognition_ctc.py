@@ -882,6 +882,16 @@ def main():
             desc="removing punctuation from train split",
         )
 
+    if training_args.do_train and chars_to_ignore_regex is not None:
+        def remove_punctuation(batch):
+            batch[text_column_name] = re.sub(chars_to_ignore_regex, "", batch[text_column_name])
+
+        raw_datasets["train"] = raw_datasets["train"].map(
+            remove_punctuation,
+            num_proc=data_args.preprocessing_num_workers,
+            desc="removing punctuation from train",
+        )
+
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
 
@@ -901,11 +911,7 @@ def main():
         batch["input_length"] = len(batch["input_values"])
 
         # process targets
-        if chars_to_ignore_regex is not None:
-            input_str = re.sub(chars_to_ignore_regex, "", batch[text_column_name])
-        else:
-            input_str = batch[text_column_name]
-        input_str = input_str.lower() if do_lower_case else input_str
+        input_str = batch[text_column_name].lower() if do_lower_case else input_str
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch
