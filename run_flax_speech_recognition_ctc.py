@@ -240,9 +240,9 @@ class DataTrainingArguments:
         default=False,
         metadata={"help": "Whether or not to remove punctuation during training."}
     )
-    chars_to_ignore: Optional[List[str]] = field(
-        default=', ? . ! - ; : " “ % ‘ ” �'.split(" "),
-        metadata={"help": "A list of characters to remove from the transcripts if `remove_punctuation` is set to `True`."},
+    chars_to_ignore: str = field(
+        default=tuple(', ? . ! - ; : " “ % ‘ ” �'.split(" ")),
+        metadata={"help": "A tuple of characters to remove from the transcripts if `remove_punctuation` is set to `True`."},
     )
 
 
