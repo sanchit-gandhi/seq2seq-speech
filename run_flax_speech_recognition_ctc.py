@@ -20,6 +20,7 @@ Fine-tuning the Flax library models for connectionist temporal classification (C
 
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -234,6 +235,14 @@ class DataTrainingArguments:
     test_split_name: str = field(
         default="test",
         metadata={"help": "The name of the test data set split to use (via the datasets library). Defaults to 'test'"},
+    )
+    remove_punctuation: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to remove punctuation during training."}
+    )
+    chars_to_ignore: Optional[List[str]] = field(
+        default=', ? . ! - ; : " “ % ‘ ” �'.split(" "),
+        metadata={"help": "A list of characters to remove from the transcripts if `remove_punctuation` is set to `True`."},
     )
 
 
@@ -853,6 +862,9 @@ def main():
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
+    chars_to_ignore_regex = (
+        f'[{"".join(data_args.chars_to_ignore)}]' if data_args.remove_punctuation else None
+    )
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -873,7 +885,11 @@ def main():
         batch["input_length"] = len(batch["input_values"])
 
         # process targets
-        input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
+        if chars_to_ignore_regex is not None:
+            input_str = re.sub(chars_to_ignore_regex, "", batch[text_column_name])
+        else:
+            input_str = batch[text_column_name]
+        input_str = input_str.lower() if do_lower_case else input_str
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch
