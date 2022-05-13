@@ -17,7 +17,7 @@
         </fileTransfer>
       </webServer>
       <webServer id="4c1bb5b3-c99f-4983-a80b-74311d9a2bdc" name="tpu-2">
-        <fileTransfer accessType="SFTP" host="34.90.96.24" port="22" sshConfigId="fa3f5619-fe78-4da6-ac8c-11e0aca4fe7d" sshConfig="tpu-2" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.147.2.81" port="22" sshConfigId="fa3f5619-fe78-4da6-ac8c-11e0aca4fe7d" sshConfig="tpu-2" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
