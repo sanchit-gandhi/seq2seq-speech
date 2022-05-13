@@ -3,6 +3,7 @@ from datasets import load_dataset
 from collections import Counter
 import json
 import os
+import re
 import tempfile
 from transformers import Wav2Vec2CTCTokenizer
 
@@ -17,9 +18,11 @@ use_auth_token = True
 # name of the text data column
 text_column = "sentence"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_cv9_tokenizer"
+tokenizer_name = "wav2vec2_ctc_cv9_tokenizer_no_punctuation"
 # dataset cache directory
-dataset_cache_dir = "/home/sanchitgandhi/cache"
+dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
+# chars to remove if `remove_punctuation` is set to True
+chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
 
 dataset = load_dataset(
     dataset_name,
@@ -34,7 +37,7 @@ dataset = dataset.remove_columns(list(set(dataset.column_names) - set([text_colu
 
 
 # define function to see stats about letters and to create vocab
-def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, cutoff_freq=0.0):
+def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, remove_punctuation=False, cutoff_freq=0.0):
     def extract_all_chars(batch):
         all_text = " ".join(batch[text_column])
 
@@ -44,6 +47,8 @@ def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=Fals
             all_text = all_text.lower()
         if do_upper:
             all_text = all_text.upper()
+        if remove_punctuation:
+            all_text = re.sub(chars_to_remove_regex, '', all_text)
 
         count_chars_dict = Counter(list(all_text))
         # sort by freq
@@ -264,9 +269,10 @@ Total characters in dataset: 57415071
 # Running it once more and now keeping the dict
 do_lower = True
 do_upper = False
+remove_punctuation = True
 cutoff_freq = 0.01
 
-vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, cutoff_freq=cutoff_freq)
+vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, cutoff_freq=cutoff_freq)
 
 # save vocab dict to be loaded into tokenizer
 with tempfile.TemporaryDirectory() as tmp:
