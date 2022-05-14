@@ -1210,7 +1210,7 @@ def main():
         p_generate_step = jax.pmap(generate_step, "batch")
         p_final_generate_step = jax.pmap(final_generate_step, "batch")
 
-    def run_evaluation(final_step=False):
+    def run_evaluation(step, final_step=False):
         if training_args.do_eval:
             # ======================== Evaluating ==============================
             eval_metrics = []
@@ -1268,26 +1268,26 @@ def main():
             epochs.desc = desc
 
             # Save metrics
-            write_wandb_log(eval_metrics, cur_step, prefix="eval")
+            write_wandb_log(eval_metrics, step, prefix="eval")
             write_wandb_pred(
                 pred_str,
                 label_str,
                 eval_ids,
-                cur_step,
+                step,
                 top_ids=vectorized_datasets["eval"]["input_id"] if data_args.log_first_ids else None,
                 final_step=final_step,
             )
             # if has_tensorboard and jax.process_index() == 0:
-            # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+            # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
 
-    def save_checkpoint():
+    def save_checkpoint(step):
         # save and push checkpoint to the hub
         if jax.process_index() == 0:
             params = jax.device_get(jax.tree_map(lambda x: x[0], state.params))
             model.save_pretrained(training_args.output_dir, params=params)
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
-                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(cur_step / 1000)}k", blocking=False)
+                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(step / 1000)}k", blocking=False)
 
     # Replicate the train state on each device
     state = state.replicate()
@@ -1345,17 +1345,18 @@ def main():
                     break
 
                 if cur_step % training_args.eval_steps == 0:
-                    run_evaluation(final_step=False)
+                    run_evaluation(cur_step, final_step=False)
 
                 if cur_step % training_args.save_steps == 0:
-                    save_checkpoint()
+                    save_checkpoint(cur_step)
 
     if training_args.do_train:
-        save_checkpoint()
+        save_checkpoint(cur_step)
 
     if training_args.do_eval:
-        run_evaluation(final_step=True)
+        run_evaluation(cur_step, final_step=True)
 
+    # TODO: collapse 'do_predict' into the run_evaluation function
     if training_args.do_predict:
         # ======================== Prediction ==============================
         for split in test_split:

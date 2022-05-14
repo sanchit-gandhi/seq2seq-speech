@@ -1182,7 +1182,7 @@ def main():
     if training_args.do_eval:
         p_eval_step = jax.pmap(eval_step, "batch")
 
-    def run_evaluation():
+    def run_evaluation(step):
         if training_args.do_eval:
             # ======================== Evaluating ==============================
             eval_metrics = []
@@ -1221,19 +1221,19 @@ def main():
             epochs.desc = desc
 
             # Save metrics
-            write_wandb_log(eval_metrics, cur_step, prefix="eval")
-            write_wandb_pred(pred_str, label_str, cur_step)
+            write_wandb_log(eval_metrics, step, prefix="eval")
+            write_wandb_pred(pred_str, label_str, step)
             # if has_tensorboard and jax.process_index() == 0:
-                # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+                # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
 
-    def save_checkpoint():
+    def save_checkpoint(step):
         # save and push checkpoint to the hub
         if jax.process_index() == 0:
             params = jax.device_get(jax.tree_map(lambda x: x[0], state.params))
             model.save_pretrained(training_args.output_dir, params=params)
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
-                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(cur_step / 1000)}k", blocking=False)
+                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(step / 1000)}k", blocking=False)
 
 
     logger.info("***** Running training *****")
@@ -1288,17 +1288,18 @@ def main():
                     break
 
                 if cur_step % training_args.eval_steps == 0:
-                    run_evaluation()
+                    run_evaluation(cur_step)
 
                 if cur_step % training_args.save_steps == 0:
-                    save_checkpoint()
+                    save_checkpoint(cur_step)
 
     if training_args.do_train:
-        save_checkpoint()
+        save_checkpoint(cur_step)
 
     if training_args.do_eval:
-        run_evaluation()
+        run_evaluation(cur_step)
 
+    # TODO: collapse 'do_predict' into the run_evaluation function
     if training_args.do_predict:
         for split in test_split:
             # ======================== Evaluating ==============================
