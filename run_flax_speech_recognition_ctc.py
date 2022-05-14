@@ -240,10 +240,6 @@ class DataTrainingArguments:
         default=False,
         metadata={"help": "Whether or not to remove punctuation during training."}
     )
-    chars_to_ignore: Tuple[str] = field(
-        default=tuple(', ? . ! - ; : " “ % ‘ ” �'.split(" ")),
-        metadata={"help": "A tuple of characters to remove from the transcripts if `remove_punctuation` is set to `True`."},
-    )
 
 
 # @flax.struct.dataclass
@@ -862,9 +858,17 @@ def main():
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
-    chars_to_ignore_regex = (
-        f'[{"".join(data_args.chars_to_ignore)}]' if data_args.remove_punctuation else None
-    )
+    chars_to_ignore_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
+
+    if training_args.do_train and data_args.remove_punctuation:
+        def remove_punctuation(batch):
+            batch[text_column_name] = re.sub(chars_to_ignore_regex, "", batch[text_column_name])
+
+        raw_datasets["train"] = raw_datasets["train"].map(
+            remove_punctuation,
+            num_proc=data_args.preprocessing_num_workers,
+            desc="removing punctuation from train split",
+        )
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
