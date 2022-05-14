@@ -154,6 +154,13 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    max_test_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of test examples to this "
+            "value if set."
+        },
+    )
     audio_column_name: str = field(
         default="audio",
         metadata={"help": "The name of the dataset column containing the audio data. Defaults to 'audio'"},
@@ -227,6 +234,10 @@ class DataTrainingArguments:
     wandb_project: str = field(
         default="flax-speech-recognition-ctc",
         metadata={"help": "The name of the wandb project."},
+    )
+    wandb_name: str = field(
+        default=None,
+        metadata={"help": "The name of the wandb run."},
     )
     wandb_job_type: str = field(
         default="CTC",
@@ -549,22 +560,20 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, epoch, step, num_log=50, prefix="eval"):
+def write_wandb_pred(pred_str, label_str, step, num_log=50, prefix="eval"):
     if jax.process_index() == 0:
         # convert str data to a wandb compatible format
         str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
         # we'll log the first 50 predictions for each epoch
         wandb.log(
-            {f"{prefix}/epoch_{epoch + 1}": wandb.Table(columns=["label_str", "pred_str"], data=str_data[:num_log])}, step,
+            {f"{prefix}/step_{int(step / 1000)}k": wandb.Table(columns=["label_str", "pred_str"], data=str_data[:num_log])}, step,
         )
 
 
 def create_learning_rate_fn(
-    train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
+    num_train_steps: int, num_warmup_steps: int, learning_rate: float
 ) -> Callable[[int], jnp.array]:
     """Returns a linear warmup, linear_decay learning rate function."""
-    steps_per_epoch = train_ds_size // train_batch_size
-    num_train_steps = steps_per_epoch * num_train_epochs
     warmup_fn = optax.linear_schedule(init_value=0.0, end_value=learning_rate, transition_steps=num_warmup_steps)
     decay_fn = optax.linear_schedule(
         init_value=learning_rate, end_value=0, transition_steps=num_train_steps - num_warmup_steps
@@ -726,7 +735,7 @@ def main():
 
     # Set up wandb run
     if jax.process_index() == 0:
-        wandb.init(project=data_args.wandb_project, job_type=data_args.wandb_job_type)
+        wandb.init(project=data_args.wandb_project, name=data_args.wandb_name, job_type=data_args.wandb_job_type)
 
     logger.info("Training/evaluation parameters %s", training_args)
 
@@ -743,6 +752,7 @@ def main():
             data_args.dataset_config_name,
             split=data_args.train_split_name,
             cache_dir=data_args.dataset_cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
 
     if training_args.do_eval:
@@ -751,6 +761,7 @@ def main():
             data_args.dataset_config_name,
             split=data_args.eval_split_name,
             cache_dir=data_args.dataset_cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
 
     if training_args.do_predict:
@@ -761,6 +772,7 @@ def main():
                 data_args.dataset_config_name,
                 split=split,
                 cache_dir=data_args.dataset_cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
             )
 
     if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
@@ -870,6 +882,16 @@ def main():
             desc="removing punctuation from train split",
         )
 
+    if training_args.do_train and chars_to_ignore_regex is not None:
+        def remove_punctuation(batch):
+            batch[text_column_name] = re.sub(chars_to_ignore_regex, "", batch[text_column_name])
+
+        raw_datasets["train"] = raw_datasets["train"].map(
+            remove_punctuation,
+            num_proc=data_args.preprocessing_num_workers,
+            desc="removing punctuation from train",
+        )
+
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
 
@@ -889,11 +911,7 @@ def main():
         batch["input_length"] = len(batch["input_values"])
 
         # process targets
-        if chars_to_ignore_regex is not None:
-            input_str = re.sub(chars_to_ignore_regex, "", batch[text_column_name])
-        else:
-            input_str = batch[text_column_name]
-        input_str = input_str.lower() if do_lower_case else input_str
+        input_str = batch[text_column_name].lower() if do_lower_case else input_str
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch
@@ -986,7 +1004,7 @@ def main():
     rng, dropout_rng = jax.random.split(rng)
 
     # Store some constants
-    num_epochs = int(training_args.num_train_epochs)
+    max_steps = int(training_args.max_steps)
     gradient_accumulation_steps = int(training_args.gradient_accumulation_steps)
     train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count()
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
@@ -996,13 +1014,17 @@ def main():
     if training_args.do_train:
         num_train_samples = len(vectorized_datasets["train"])
         steps_per_epoch = num_train_samples // batch_size_per_update
-        total_train_steps = steps_per_epoch * num_epochs
+        if max_steps > 0:
+            num_epochs = - (training_args.max_steps // - steps_per_epoch)
+            total_train_steps = max_steps
+        else:
+            num_epochs = int(training_args.num_train_epochs)
+            total_train_steps = steps_per_epoch * num_epochs
 
         # Create learning rate schedule
+        # Create learning rate schedule
         linear_decay_lr_schedule_fn = create_learning_rate_fn(
-            len(vectorized_datasets["train"]),
-            batch_size_per_update,
-            training_args.num_train_epochs,
+            total_train_steps,
             training_args.warmup_steps,
             training_args.learning_rate,
         )
@@ -1046,6 +1068,7 @@ def main():
         if training_args.multisteps and gradient_accumulation_steps > 1:
             optim = optax.MultiSteps(optim, gradient_accumulation_steps, use_grad_mean=False)
     else:
+        num_epochs = 0
         total_train_steps = 0
         num_train_samples = 0
         optim = None
@@ -1159,55 +1182,7 @@ def main():
     if training_args.do_eval:
         p_eval_step = jax.pmap(eval_step, "batch")
 
-
-    logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {num_train_samples}")
-    logger.info(f"  Num Epochs = {num_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {training_args.per_device_train_batch_size}")
-    logger.info(f"  Num gradient accumulation steps = {gradient_accumulation_steps}")
-    logger.info(f"  Total train batch size (w. parallel & distributed) = {batch_size_per_update}")
-    logger.info(f"  Total optimization steps = {total_train_steps}")
-    logger.info(f"  Gradient checkpointing: {config.gradient_checkpointing}")
-    logger.info(f"  Use scan: {config.use_scan}")
-    logger.info(f"  Fuse matmuls: {config.fuse_matmuls}")
-
-    train_time = cur_step = 0
-    epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
-    for epoch in epochs:
-        if training_args.do_train:
-            # ======================== Training ================================
-            train_start = time.time()
-
-            # Create sampling rng
-            rng, input_rng = jax.random.split(rng)
-
-            # Generate an epoch by randomly shuffling sampling indices from the train dataset and grouping by length
-            train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
-            train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
-
-            # Gather the indices for creating the batch and do a training step
-            for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
-                samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
-                batch = data_collator(samples)
-                batch = shard(batch.data)
-                state, train_metric = p_train_step(state, batch)
-
-                cur_step = epoch * (num_train_samples // batch_size_per_update) + step
-
-                if cur_step % training_args.logging_steps == 0 and cur_step > 0:
-                    # Save metrics
-                    train_metric = unreplicate(train_metric)
-                    train_time += time.time() - train_start
-                    # need to upcast all device arrays to fp32 for wandb logging (jnp.bfloat16 not supported) -> do this here OR in train_step
-                    write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
-                    # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
-                    # if has_tensorboard and jax.process_index() == 0:
-                        # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
-
-                    epochs.write(
-                        f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
-                    )
-
+    def run_evaluation(step):
         if training_args.do_eval:
             # ======================== Evaluating ==============================
             eval_metrics = []
@@ -1246,19 +1221,85 @@ def main():
             epochs.desc = desc
 
             # Save metrics
-            write_wandb_log(eval_metrics, cur_step, prefix="eval")
-            write_wandb_pred(pred_str, label_str, epoch)
-            if has_tensorboard and jax.process_index() == 0:
-                write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+            write_wandb_log(eval_metrics, step, prefix="eval")
+            write_wandb_pred(pred_str, label_str, step)
+            # if has_tensorboard and jax.process_index() == 0:
+                # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
 
-        # save checkpoint after each epoch and push checkpoint to the hub
-        if training_args.do_train and jax.process_index() == 0:
+    def save_checkpoint(step):
+        # save and push checkpoint to the hub
+        if jax.process_index() == 0:
             params = jax.device_get(jax.tree_map(lambda x: x[0], state.params))
             model.save_pretrained(training_args.output_dir, params=params)
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
-                repo.push_to_hub(commit_message=f"Saving weights and logs of epoch {epoch}", blocking=False)
+                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(step / 1000)}k", blocking=False)
 
+
+    logger.info("***** Running training *****")
+    logger.info(f"  Num examples = {num_train_samples}")
+    logger.info(f"  Num Epochs = {num_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {training_args.per_device_train_batch_size}")
+    logger.info(f"  Num gradient accumulation steps = {gradient_accumulation_steps}")
+    logger.info(f"  Total train batch size (w. parallel & distributed) = {batch_size_per_update}")
+    logger.info(f"  Total optimization steps = {total_train_steps}")
+    logger.info(f"  Gradient checkpointing: {config.gradient_checkpointing}")
+    logger.info(f"  Use scan: {config.use_scan}")
+    logger.info(f"  Fuse matmuls: {config.fuse_matmuls}")
+
+    train_time = cur_step = 0
+    epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
+    for epoch in epochs:
+        if training_args.do_train:
+            # ======================== Training ================================
+            train_start = time.time()
+
+            # Create sampling rng
+            rng, input_rng = jax.random.split(rng)
+
+            # Generate an epoch by randomly shuffling sampling indices from the train dataset and grouping by length
+            train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
+            train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
+
+            # Gather the indices for creating the batch and do a training step
+            for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1), 1):
+                samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
+                batch = data_collator(samples)
+                batch = shard(batch.data)
+                state, train_metric = p_train_step(state, batch)
+
+                cur_step = epoch * (num_train_samples // batch_size_per_update) + step
+
+                if cur_step % training_args.logging_steps == 0:
+                    # Save metrics
+                    train_metric = unreplicate(train_metric)
+                    train_time += time.time() - train_start
+                    # need to upcast all device arrays to fp32 for wandb logging (jnp.bfloat16 not supported) -> do this here OR in train_step
+                    write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
+                    # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
+                    # if has_tensorboard and jax.process_index() == 0:
+                        # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
+
+                    epochs.write(
+                        f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
+                    )
+
+                if cur_step % total_train_steps == 0:
+                    break
+
+                if cur_step % training_args.eval_steps == 0:
+                    run_evaluation(cur_step)
+
+                if cur_step % training_args.save_steps == 0:
+                    save_checkpoint(cur_step)
+
+    if training_args.do_train:
+        save_checkpoint(cur_step)
+
+    if training_args.do_eval:
+        run_evaluation(cur_step)
+
+    # TODO: collapse 'do_predict' into the run_evaluation function
     if training_args.do_predict:
         for split in test_split:
             # ======================== Evaluating ==============================
@@ -1299,9 +1340,9 @@ def main():
 
             # Save metrics
             write_wandb_log(eval_metrics, cur_step, prefix=split)
-            write_wandb_pred(pred_str, label_str, epoch, cur_step, prefix=split)
-            if has_tensorboard and jax.process_index() == 0:
-                write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+            write_wandb_pred(pred_str, label_str, cur_step, prefix=split)
+            # if has_tensorboard and jax.process_index() == 0:
+                # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
 
 if __name__ == "__main__":

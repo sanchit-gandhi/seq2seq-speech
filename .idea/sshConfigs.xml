@@ -5,7 +5,7 @@
       <sshConfig host="34.90.3.255" id="bb8d8741-1c86-480a-81d0-ad83dc02ca1d" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="tpu-1" nameFormat="CUSTOM" username="sanchitgandhi" useOpenSSHConfig="true">
         <option name="customName" value="tpu-1" />
       </sshConfig>
-      <sshConfig host="34.90.96.24" id="fa3f5619-fe78-4da6-ac8c-11e0aca4fe7d" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="tpu-2" nameFormat="CUSTOM" username="sanchitgandhi" useOpenSSHConfig="true">
+      <sshConfig host="34.147.2.81" id="fa3f5619-fe78-4da6-ac8c-11e0aca4fe7d" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="tpu-2" nameFormat="CUSTOM" username="sanchitgandhi" useOpenSSHConfig="true">
         <option name="customName" value="tpu-2" />
       </sshConfig>
       <sshConfig host="34.90.202.15" id="c5867d46-2a17-40e8-b674-d5459fc14235" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="tpu-3" nameFormat="CUSTOM" username="sanchitgandhi" useOpenSSHConfig="true">
