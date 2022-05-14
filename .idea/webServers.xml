@@ -10,7 +10,7 @@
         </fileTransfer>
       </webServer>
       <webServer id="ab1833d5-ad73-4828-bc7e-adf86aba5741" name="special">
-        <fileTransfer accessType="SFTP" host="35.239.40.64" port="22" sshConfigId="2d9e2694-95b8-4487-9f5d-72b791b7cc17" sshConfig="special" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.123.253.219" port="22" sshConfigId="2d9e2694-95b8-4487-9f5d-72b791b7cc17" sshConfig="special" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>

@@ -257,9 +257,6 @@ class DataTrainingArguments:
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
     )
-    def __post_init__(self):
-        if self.pad_target_to_multiple_of is None:
-            self.pad_target_to_multiple_of = self.max_target_length
 
 
 # @flax.struct.dataclass
@@ -629,7 +626,7 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, eval_ids, epoch, step, prefix="eval", top_ids=None, final_step=True):
+def write_wandb_pred(pred_str, label_str, eval_ids, step, prefix="eval", top_ids=None, final_step=True):
     if jax.process_index() == 0:
         top_ids = top_ids if top_ids else eval_ids
         num_beams = len(pred_str)
@@ -641,13 +638,14 @@ def write_wandb_pred(pred_str, label_str, eval_ids, epoch, step, prefix="eval", 
                 str_data.append([eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)])
         columns = ["id", "label_str"] + [f"beam_{i + 1}" for i in range(num_beams)]
         wandb.log(
-            {f"{prefix}/epoch_{epoch + 1}": wandb.Table(columns=columns, data=str_data[:50])},
+            {f"{prefix}/step_{int(step / 1000)}k": wandb.Table(columns=columns, data=str_data[:50])},
             step,
         )
         if final_step:
             str_data = np.array(str_data)
+            str_data = str_data[str_data[:, 1] != str_data[:, 2]]
             wandb.log(
-                {f"{prefix}/epoch_{epoch + 1}_incorrect": wandb.Table(columns=columns, data=str_data[:200000])}, step
+                {f"{prefix}/step_{int(step / 1000)}k_incorrect": wandb.Table(columns=columns, data=str_data[:200000])}, step
             )
 
 
@@ -730,6 +728,7 @@ def main():
             data_args.dataset_config_name,
             split=data_args.train_split_name,
             cache_dir=data_args.dataset_cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
 
     if training_args.do_eval:
@@ -738,6 +737,7 @@ def main():
             data_args.dataset_config_name,
             split=data_args.eval_split_name,
             cache_dir=data_args.dataset_cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
 
     if training_args.do_predict:
@@ -748,6 +748,7 @@ def main():
                 data_args.dataset_config_name,
                 split=split,
                 cache_dir=data_args.dataset_cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
             )
 
     if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
@@ -924,7 +925,7 @@ def main():
     metric = load_metric("wer")
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
-        label_ids = pad_to_max_length(np.array(label_ids, dtype='object'), tokenizer)
+        label_ids = pad_to_max_length(np.array(label_ids, dtype='object'), tokenizer) if pad_target_to_multiple_of else label_ids
 
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
         # we do not want to group tokens when computing the metrics
@@ -956,7 +957,7 @@ def main():
         target_padding="longest",
         max_target_length=max_target_length,
         pad_input_to_multiple_of=pad_input_to_multiple_of,
-        pad_target_to_multiple_of=pad_target_to_multiple_of,
+        pad_target_to_multiple_of=pad_target_to_multiple_of if pad_target_to_multiple_of else max_target_length
     )
 
     # Enable tensorboard only on the master node
@@ -992,7 +993,7 @@ def main():
     rng, dropout_rng = jax.random.split(rng)
 
     # Store some constants
-    num_epochs = int(training_args.num_train_epochs)
+    max_steps = int(training_args.max_steps)
     gradient_accumulation_steps = int(training_args.gradient_accumulation_steps)
     train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count()
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
@@ -1002,7 +1003,12 @@ def main():
     if training_args.do_train:
         num_train_samples = len(vectorized_datasets["train"])
         steps_per_epoch = num_train_samples // batch_size_per_update
-        total_train_steps = steps_per_epoch * num_epochs
+        if max_steps > 0:
+            num_epochs = - (training_args.max_steps // - steps_per_epoch)
+            total_train_steps = max_steps
+        else:
+            num_epochs = int(training_args.num_train_epochs)
+            total_train_steps = steps_per_epoch * num_epochs
 
         # Create learning rate schedule
         linear_decay_lr_schedule_fn = create_learning_rate_fn(
@@ -1048,6 +1054,7 @@ def main():
                 mask=decay_mask_fn,
             )
     else:
+        num_epochs = 0
         total_train_steps = 0
         num_train_samples = 0
         optim = None
@@ -1198,6 +1205,85 @@ def main():
     p_generate_step = jax.pmap(generate_step, "batch")
     p_final_generate_step = jax.pmap(final_generate_step, "batch")
 
+    def run_evaluation(final_step=False):
+        if training_args.do_eval:
+            # ======================== Evaluating ==============================
+            eval_metrics = []
+            eval_preds = []
+            eval_ids = []
+            eval_labels = []
+
+            # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
+            eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
+            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+
+            for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
+                samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
+                batch = data_collator(samples)
+                eval_ids.extend(batch.pop("input_ids"))
+                batch = shard(batch.data)
+                labels = batch["labels"]
+
+                metrics = p_eval_step(state.params, batch)
+                eval_metrics.append(metrics)
+
+                # generation
+                if training_args.predict_with_generate:
+                    if not final_step:
+                        generated_ids = p_generate_step(state.params, batch)
+                        eval_preds.extend(
+                            jax.device_get(generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"]))
+                        )
+                    else:
+                        generated_ids = p_final_generate_step(state.params, batch)
+                        eval_preds.extend(
+                            jax.device_get(
+                                generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
+                            )
+                        )
+                    eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+
+            # normalize eval metrics
+            eval_metrics = get_metrics(eval_metrics)
+            eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+            eval_metrics = to_fp32(eval_metrics)
+
+            # compute WER metric and get predicted string (for debugging)
+            wer_desc = ""
+            pred_str = []
+            label_str = []
+            if training_args.predict_with_generate:
+                wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
+                eval_metrics.update(wer_metric)
+                wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
+
+            # Print metrics and update progress bar
+            desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            epochs.write(desc)
+            epochs.desc = desc
+
+            # Save metrics
+            write_wandb_log(eval_metrics, cur_step, prefix="eval")
+            write_wandb_pred(
+                pred_str,
+                label_str,
+                eval_ids,
+                cur_step,
+                top_ids=vectorized_datasets["eval"]["input_id"] if data_args.log_first_ids else None,
+                final_step=final_step,
+            )
+            # if has_tensorboard and jax.process_index() == 0:
+            # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+
+    def save_checkpoint():
+        # save and push checkpoint to the hub
+        if jax.process_index() == 0:
+            params = jax.device_get(jax.tree_map(lambda x: x[0], state.params))
+            model.save_pretrained(training_args.output_dir, params=params)
+            tokenizer.save_pretrained(training_args.output_dir)
+            if training_args.push_to_hub:
+                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(cur_step / 1000)}k", blocking=False)
+
     # Replicate the train state on each device
     state = state.replicate()
 
@@ -1250,84 +1336,19 @@ def main():
                         f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
                     )
 
-        if training_args.do_eval:
-            # ======================== Evaluating ==============================
-            eval_metrics = []
-            eval_preds = []
-            eval_ids = []
-            eval_labels = []
+                if cur_step % total_train_steps == 0 and cur_step > 0:
+                    break
 
-            # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
-            eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
-            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+                if cur_step % training_args.save_steps == 0 and cur_step > 0:
+                    save_checkpoint()
 
-            for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
-                samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
-                batch = data_collator(samples)
-                eval_ids.extend(batch.pop("input_ids"))
-                batch = shard(batch.data)
-                labels = batch["labels"]
+                if cur_step % training_args.eval_steps == 0 and cur_step > 0:
+                    run_evaluation()
 
-                metrics = p_eval_step(state.params, batch)
-                eval_metrics.append(metrics)
+    save_checkpoint()
 
-                # generation
-                if training_args.predict_with_generate:
-                    final_step = (epoch + 1) == num_epochs
-                    if not final_step:
-                        generated_ids = p_generate_step(state.params, batch)
-                        eval_preds.extend(
-                            jax.device_get(generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"]))
-                        )
-                    else:
-                        generated_ids = p_final_generate_step(state.params, batch)
-                        eval_preds.extend(
-                            jax.device_get(
-                                generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
-                            )
-                        )
-                    eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
-
-            # normalize eval metrics
-            eval_metrics = get_metrics(eval_metrics)
-            eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
-            eval_metrics = to_fp32(eval_metrics)
-
-            # compute WER metric and get predicted string (for debugging)
-            wer_desc = ""
-            pred_str = []
-            label_str = []
-            if training_args.predict_with_generate:
-                wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
-                eval_metrics.update(wer_metric)
-                wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
-
-            # Print metrics and update progress bar
-            desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
-            epochs.write(desc)
-            epochs.desc = desc
-
-            # Save metrics
-            write_wandb_log(eval_metrics, cur_step, prefix="eval")
-            write_wandb_pred(
-                pred_str,
-                label_str,
-                eval_ids,
-                epoch,
-                cur_step,
-                top_ids=vectorized_datasets["eval"]["input_id"] if data_args.log_first_ids else None,
-                final_step=final_step,
-            )
-            # if has_tensorboard and jax.process_index() == 0:
-            # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
-
-        # save checkpoint after each epoch and push checkpoint to the hub
-        if jax.process_index() == 0:
-            params = jax.device_get(jax.tree_map(lambda x: x[0], state.params))
-            model.save_pretrained(training_args.output_dir + "/" + wandb.run.name, params=params)
-            tokenizer.save_pretrained(training_args.output_dir + "/" + wandb.run.name)
-            if training_args.push_to_hub:
-                repo.push_to_hub(commit_message=f"Saving weights and logs of epoch {epoch}", blocking=False)
+    if training_args.do_eval:
+        run_evaluation(final_step=True)
 
     if training_args.do_predict:
         # ======================== Prediction ==============================
@@ -1386,7 +1407,6 @@ def main():
                 pred_str,
                 label_str,
                 pred_ids,
-                epoch,
                 cur_step,
                 prefix=split,
                 top_ids=vectorized_datasets[split]["input_id"] if data_args.log_first_ids else None,
