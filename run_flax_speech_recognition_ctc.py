@@ -809,14 +809,6 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-
-    # update config according to training and model args
-    config.update(
-        {
-            "gradient_checkpointing": training_args.gradient_checkpointing,
-            "hidden_dropout": model_args.hidden_dropout,
-        }
-    )
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name if model_args.feature_extractor_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -828,6 +820,14 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+    )
+    # update config according to training args, model args, and tokenizer attributes
+    config.update(
+        {
+            "gradient_checkpointing": training_args.gradient_checkpointing,
+            "hidden_dropout": model_args.hidden_dropout,
+            "vocab_size": tokenizer.vocab_size,
+        }
     )
 
     if tokenizer.do_lower_case and data_args.dataset_name != "librispeech_asr":
@@ -853,6 +853,7 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+        ignore_mismatched_sizes=True,  # gnore the mismatch in the LM head weights based on differences in tokenizer vocab size
     )
 
     # 6. Resample speech dataset ALWAYS
