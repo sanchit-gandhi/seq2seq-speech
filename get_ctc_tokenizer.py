@@ -8,17 +8,17 @@ import tempfile
 from transformers import Wav2Vec2CTCTokenizer
 
 # which dataset
-dataset_name = "mozilla-foundation/common_voice_9_0"
+dataset_name = "LIUM/tedlium"
 # which config
-dataset_config = "en"
+dataset_config = "release3"
 # which split => @Sanchit, we should only use the train split for "fairness"
 split = "train"
 # in case the dataset requires access like CV9
 use_auth_token = True
 # name of the text data column
-text_column = "sentence"
+text_column = "text"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_cv9_tokenizer_no_punctuation"
+tokenizer_name = "wav2vec2_ctc_tedlium/tokenizer"
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # chars to remove if `remove_punctuation` is set to True
@@ -269,7 +269,7 @@ Total characters in dataset: 57415071
 # Running it once more and now keeping the dict
 do_lower = True
 do_upper = False
-remove_punctuation = True
+remove_punctuation = False
 cutoff_freq = 0.01
 
 vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, cutoff_freq=cutoff_freq)
