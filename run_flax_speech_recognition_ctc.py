@@ -853,7 +853,6 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
-        ignore_mismatched_sizes=True,  # ignore the mismatch in the LM head weights based on differences in tokenizer vocab size
     )
 
     # 6. Resample speech dataset ALWAYS
