@@ -872,16 +872,7 @@ def main():
     do_lower_case = data_args.do_lower_case
     chars_to_ignore = ', ? . ! - ; : " “ % ‘ ” �'.split(" ")
     chars_to_ignore_regex = f'[{"".join(chars_to_ignore)}]'
-
-    if training_args.do_train and data_args.remove_punctuation:
-        def remove_punctuation(batch):
-            batch[text_column_name] = re.sub(chars_to_ignore_regex, "", batch[text_column_name]).replace("'", "").replace('"', "")
-
-        raw_datasets["train"] = raw_datasets["train"].map(
-            remove_punctuation,
-            num_proc=data_args.preprocessing_num_workers,
-            desc="removing punctuation from train split",
-        )
+    speech_disfluencies = {"{cough}": "", "{breath}": "", "{noise}": "", "{smack}": "", "{uh}": "", "{um}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -893,6 +884,27 @@ def main():
         for split in test_split:
             raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
 
+    if training_args.do_train and data_args.remove_punctuation:
+        def remove_punctuation(batch):
+            batch[text_column_name] = re.sub(chars_to_ignore_regex, "", batch[text_column_name]).replace("'", "").replace('"', "")
+
+        raw_datasets["train"] = raw_datasets["train"].map(
+            remove_punctuation,
+            num_proc=data_args.preprocessing_num_workers,
+            desc="removing punctuation from train split",
+        )
+
+    # filter data where the targets are ignored in scoring
+    def is_target_labels(input_str):
+        return input_str != "ignore_time_segment_in_scoring"
+
+    if data_args.dataset_name == "LIUM/tedlium":
+        raw_datasets = raw_datasets.filter(
+            is_target_labels,
+            num_proc=num_workers,
+            input_columns=[text_column_name],
+        )
+
     def prepare_dataset(batch):
         # process audio
         sample = batch[audio_column_name]
@@ -902,7 +914,10 @@ def main():
         batch["input_length"] = len(batch["input_values"])
 
         # process targets
-        input_str = batch[text_column_name].lower() if do_lower_case else input_str
+        input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
+        for disfluency, replacement in speech_disfluencies.items():
+            input_str = input_str.replace(disfluency, replacement)
+        batch['input_str'] = input_str
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch
