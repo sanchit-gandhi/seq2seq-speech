@@ -860,6 +860,7 @@ def main():
     id_column_name = data_args.id_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
+    speech_disfluencies = {"{cough}": "", "{breath}": "", "{noise}": "", "{smack}": "", "{uh}": "", "{um}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -870,6 +871,17 @@ def main():
     if training_args.do_predict and data_args.max_test_samples is not None:
         for split in test_split:
             raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
+
+    # filter data where the targets are ignored in scoring
+    def is_target_labels(input_str):
+        return input_str != "ignore_time_segment_in_scoring"
+
+    if data_args.dataset_name == "LIUM/tedlium":
+        raw_datasets = raw_datasets.filter(
+            is_target_labels,
+            num_proc=num_workers,
+            input_columns=[text_column_name],
+        )
 
     def prepare_dataset(batch):
         # process audio
@@ -882,6 +894,9 @@ def main():
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
+        for disfluency, replacement in speech_disfluencies.items():
+            input_str = input_str.replace(disfluency, replacement)
+        batch['input_str'] = input_str
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch

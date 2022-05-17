@@ -18,11 +18,14 @@ use_auth_token = True
 # name of the text data column
 text_column = "text"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_tedlium/tokenizer"
+tokenizer_name = "wav2vec2_ctc_tedlium_tokenizer"
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # chars to remove if `remove_punctuation` is set to True
-chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
+chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\{\}\(\)\<,\>]'
+# whether to remove speech disfluencies from input text
+remove_disfluencies = True
+speech_disfluencies = {"{COUGH}": "", "{BREATH}": "", "{NOISE}": "", "{SMACK}": "", "{UH}": "", "{UM}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
 
 dataset = load_dataset(
     dataset_name,
@@ -35,6 +38,12 @@ dataset = load_dataset(
 # remove all data that is unnecessary to save RAM
 dataset = dataset.remove_columns(list(set(dataset.column_names) - set([text_column])))
 
+if remove_disfluencies:
+    def prepare_dataset(batch):
+        for disfluency, replacement in speech_disfluencies.items():
+            batch[text_column] = batch[text_column].replace(disfluency, replacement)
+        return batch
+    dataset = dataset.map(prepare_dataset, desc="removing speech disfluencies",)
 
 # define function to see stats about letters and to create vocab
 def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, remove_punctuation=False, cutoff_freq=0.0):
@@ -85,6 +94,13 @@ def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=Fals
 
     # Wav2Vec2CTC Tokenizers always have those as the first tokens (important for CTC)
     vocab = ["<pad>", "<s>", "</s>", "<unk>"] + vocab
+
+    alphabet = list(map(chr, range(97, 123)))
+
+    for char in alphabet:
+        char = char.upper() if do_upper else char
+        if char not in vocab:
+            vocab.append(char)
 
     # create json dict
     vocab_dict = {v: k for k, v in enumerate(list(vocab))}
