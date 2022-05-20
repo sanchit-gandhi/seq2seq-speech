@@ -876,7 +876,7 @@ def main():
     def is_target_labels(input_str):
         return input_str != "ignore_time_segment_in_scoring"
 
-    if data_args.dataset_name == "LIUM/tedlium":
+    if data_args.dataset_name.split("/")[-1] == "tedlium":
         raw_datasets = raw_datasets.filter(
             is_target_labels,
             num_proc=num_workers,
@@ -894,9 +894,18 @@ def main():
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
-        for disfluency, replacement in speech_disfluencies.items():
-            input_str = input_str.replace(disfluency, replacement)
-        batch['input_str'] = input_str
+        if input_str.startswith('"') and input_str.endswith('"'):
+            # we can remove trailing quotation marks as they do not affect the transcription
+            input_str = input_str[1:-1]
+        input_str = input_str.replace('""', '"')
+        if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
+            # for CV9, we'll normalize the text to always finish with punctuation
+            if input_str[-1] not in ['.', '?', '!']:
+                input_str = input_str + '.'
+        if data_args.dataset_name.split("/")[-1] == "tedlium" and data_args.dataset_config_name == "release1":
+            # TEDLIUM Release 1 has an array of speech disfluencies that need removing
+            for disfluency, replacement in speech_disfluencies.items():
+                input_str = input_str.replace(disfluency, replacement)
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch

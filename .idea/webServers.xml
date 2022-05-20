@@ -37,13 +37,6 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
-      <webServer id="3e8cebd4-2667-4fc8-8df3-2e70467b2e2b" name="tpu-5">
-        <fileTransfer accessType="SFTP" host="35.204.237.183" port="22" sshConfigId="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" sshConfig="tpu-5" keyPair="true">
-          <advancedOptions>
-            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
-          </advancedOptions>
-        </fileTransfer>
-      </webServer>
       <webServer id="2c3c62ab-cac1-4870-b481-7e90ca66a0ac" name="transformers-testing">
         <fileTransfer accessType="SFTP" host="35.225.100.220" port="22" sshConfigId="ede8b798-0778-4b7f-867e-90218e340bcd" sshConfig="transformers-testing" keyPair="true">
           <advancedOptions>
@@ -53,6 +46,13 @@
       </webServer>
       <webServer id="dea70a95-38e3-41f4-b865-4b9fc6c55697" name="patrick-tpu">
         <fileTransfer accessType="SFTP" host="34.91.183.220" port="22" sshConfigId="4b5e0687-8532-48b2-ab54-47cf488b8282" sshConfig="patrick-tpu" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="3e8cebd4-2667-4fc8-8df3-2e70467b2e2b" name="tpu-5">
+        <fileTransfer accessType="SFTP" host="34.90.63.133" port="22" sshConfigId="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" sshConfig="tpu-5" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -68,9 +68,9 @@
           <name value="tpu-2" />
           <name value="tpu-3" />
           <name value="tpu-4" />
-          <name value="tpu-5" />
           <name value="transformers-testing" />
           <name value="patrick-tpu" />
+          <name value="tpu-5" />
         </servers>
       </group>
     </groups>
