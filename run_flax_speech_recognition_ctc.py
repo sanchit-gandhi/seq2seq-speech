@@ -1231,7 +1231,7 @@ def main():
             wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
 
             # Print metrics and update progress bar
-            desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            desc = f"Step... ({step}/{total_train_steps} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
             epochs.write(desc)
             epochs.desc = desc
 
@@ -1349,7 +1349,7 @@ def main():
             wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
 
             # Print metrics and update progress bar
-            desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            desc = f"Step... ({cur_step}/{total_train_steps} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
             epochs.write(desc)
             epochs.desc = desc
 
