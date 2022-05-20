@@ -47,7 +47,7 @@ from models.configuration_wav2vec2 import Wav2Vec2Config
 from optax._src import linear_algebra
 from transformers import (
     AutoFeatureExtractor,
-    AutoProcessor,
+    Wav2Vec2ProcessorWithLM,
     AutoTokenizer,
     HfArgumentParser,
     TrainingArguments,
@@ -56,6 +56,8 @@ from transformers import (
 from transformers.file_utils import get_full_repo_name
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
+
+from pyctcdecode import BeamSearchDecoderCTC
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -83,6 +85,9 @@ class ModelArguments:
     )
     feature_extractor_name: Optional[str] = field(
         default=None, metadata={"help": "feature extractor name or path if not the same as model_name"}
+    )
+    decoder_name: Optional[str] = field(
+        default=None, metadata={"help": "LM decoder name or path if not the same as model_name"}
     )
     cache_dir: Optional[str] = field(
         default=None,
@@ -248,8 +253,7 @@ class DataTrainingArguments:
         metadata={"help": "The name of the test data set split to use (via the datasets library). Defaults to 'test'"},
     )
     remove_punctuation: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to remove punctuation during training."}
+        default=False, metadata={"help": "Whether or not to remove punctuation during training."}
     )
 
 
@@ -566,7 +570,12 @@ def write_wandb_pred(pred_str, label_str, step, num_log=50, prefix="eval"):
         str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
         # we'll log the first 50 predictions for each epoch
         wandb.log(
-            {f"{prefix}/step_{int(step / 1000)}k": wandb.Table(columns=["label_str", "pred_str"], data=str_data[:num_log])}, step,
+            {
+                f"{prefix}/step_{int(step / 1000)}k": wandb.Table(
+                    columns=["label_str", "pred_str"], data=str_data[:num_log]
+                )
+            },
+            step,
         )
 
 
@@ -582,7 +591,15 @@ def create_learning_rate_fn(
     return schedule_fn
 
 
-def ctc_loss(logits, logits_attention_mask, labels, blank_id, loss_reduction="mean", output_emission_dict=False, log_epsilon=-100000.0):
+def ctc_loss(
+    logits,
+    logits_attention_mask,
+    labels,
+    blank_id,
+    loss_reduction="mean",
+    output_emission_dict=False,
+    log_epsilon=-100000.0,
+):
     """Computes CTC loss.
     This function performs forward computation over an FSA with `N * 2` states
     where `N` is the max number of labels. The states are split into two groups:
@@ -636,35 +653,33 @@ def ctc_loss(logits, logits_attention_mask, labels, blank_id, loss_reduction="me
     repeat = (labels[:, :-1] == labels[:, 1:]).astype(jnp.float32)
     repeat = jnp.pad(repeat, ((0, 0), (0, 1)))
 
-    logprobs_phi = logprobs[:, :, blank_id:blank_id + 1]  # [B, T, 1]
+    logprobs_phi = logprobs[:, :, blank_id : blank_id + 1]  # [B, T, 1]
     logprobs_phi = jnp.transpose(logprobs_phi, (1, 0, 2))  # [T, B, 1]
 
     one_hot = jax.nn.one_hot(labels, num_classes=num_classes)  # [B, N, K]
-    logprobs_emit = jnp.einsum('btk,bnk->btn', logprobs, one_hot)
+    logprobs_emit = jnp.einsum("btk,bnk->btn", logprobs, one_hot)
     logprobs_emit = jnp.transpose(logprobs_emit, (1, 0, 2))  # [T, B, N]
 
-    logalpha_phi_init = jnp.ones(
-        (batchsize, maxlabellen + 1)) * log_epsilon  # [B, N]
+    logalpha_phi_init = jnp.ones((batchsize, maxlabellen + 1)) * log_epsilon  # [B, N]
     logalpha_phi_init = logalpha_phi_init.at[:, 0].set(0.0)
-    logalpha_emit_init = jnp.ones(
-        (batchsize, maxlabellen)) * log_epsilon  # [B, N]
+    logalpha_emit_init = jnp.ones((batchsize, maxlabellen)) * log_epsilon  # [B, N]
 
     def loop_body(prev, x):
         prev_phi, prev_emit = prev
         # emit-to-phi epsilon transition, except if the next label is repetition
         prev_phi_orig = prev_phi
-        prev_phi = prev_phi.at[:, 1:].set(
-            jnp.logaddexp(prev_phi[:, 1:], prev_emit + log_epsilon * repeat))
+        prev_phi = prev_phi.at[:, 1:].set(jnp.logaddexp(prev_phi[:, 1:], prev_emit + log_epsilon * repeat))
 
         logprob_emit, logprob_phi, pad = x
 
         # phi-to-emit transition
-        next_emit = jnp.logaddexp(prev_phi[:, :-1] + logprob_emit,
-                                  prev_emit + logprob_emit)
+        next_emit = jnp.logaddexp(prev_phi[:, :-1] + logprob_emit, prev_emit + logprob_emit)
         # self-loop transition
         next_phi = prev_phi + logprob_phi
         # emit-to-phi blank transition only when the next label is repetition
-        next_phi = next_phi.at[:, 1:].set(jnp.logaddexp(next_phi[:, 1:], prev_emit + logprob_phi + log_epsilon * (1.0 - repeat)))
+        next_phi = next_phi.at[:, 1:].set(
+            jnp.logaddexp(next_phi[:, 1:], prev_emit + logprob_phi + log_epsilon * (1.0 - repeat))
+        )
 
         pad = pad.reshape((batchsize, 1))
         next_emit = pad * prev_emit + (1.0 - pad) * next_emit
@@ -676,13 +691,12 @@ def ctc_loss(logits, logits_attention_mask, labels, blank_id, loss_reduction="me
     _, (logalpha_phi, logalpha_emit) = jax.lax.scan(loop_body, (logalpha_phi_init, logalpha_emit_init), xs)
 
     # last row needs to be updated with the last epsilon transition
-    logalpha_phi_last = logalpha_phi[-1].at[:, 1:].set(
-        jnp.logaddexp(logalpha_phi[-1, :, 1:], logalpha_emit[-1]))
+    logalpha_phi_last = logalpha_phi[-1].at[:, 1:].set(jnp.logaddexp(logalpha_phi[-1, :, 1:], logalpha_emit[-1]))
     logalpha_phi = logalpha_phi.at[-1].set(logalpha_phi_last)
 
     # extract per_seq_loss
     one_hot = jax.nn.one_hot(labellens, num_classes=maxlabellen + 1)  # [B, N+1]
-    per_seq_loss = -jnp.einsum('bn,bn->b', logalpha_phi_last, one_hot)
+    per_seq_loss = -jnp.einsum("bn,bn->b", logalpha_phi_last, one_hot)
 
     if loss_reduction == "mean":
         target_lengths = labelpaddings.shape[-1] - labelpaddings.sum(axis=-1)
@@ -696,11 +710,12 @@ def ctc_loss(logits, logits_attention_mask, labels, blank_id, loss_reduction="me
         return loss
 
     return loss, {
-        'logalpha_phi': logalpha_phi,
-        'logalpha_emit': logalpha_emit,
-        'logprobs_phi': logprobs_phi,
-        'logprobs_emit': logprobs_emit,
+        "logalpha_phi": logalpha_phi,
+        "logalpha_emit": logalpha_emit,
+        "logprobs_phi": logprobs_phi,
+        "logprobs_emit": logprobs_emit,
     }
+
 
 def main():
     # 1. Parse input arguments
@@ -772,7 +787,7 @@ def main():
                 data_args.dataset_config_name,
                 split=split,
                 cache_dir=data_args.dataset_cache_dir,
-            use_auth_token=True if model_args.use_auth_token else None,
+                use_auth_token=True if model_args.use_auth_token else None,
             )
 
     if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
@@ -821,6 +836,16 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
+    try:
+        decoder = BeamSearchDecoderCTC.load_from_dir(
+            model_args.decoder_name if model_args.decoder_name else model_args.model_name_or_path,
+        )
+    except FileNotFoundError:
+        decoder = BeamSearchDecoderCTC.load_from_hf_hub(
+            model_args.decoder_name if model_args.decoder_name else model_args.model_name_or_path,
+        )
+
     # update config according to training args, model args, and tokenizer attributes
     config.update(
         {
@@ -830,16 +855,18 @@ def main():
         }
     )
 
-    if tokenizer.do_lower_case and data_args.dataset_name != "librispeech_asr":
-        raise ValueError("Setting the tokenizer attribute `do_lower_case` to `True` converts all input strings to "
-        "uppercase prior to tokenization. This should only be done when the tokenizer is built on an uppercased corpus,"
-        "i.e. for the dataset `librispeech_asr` only. If your dataset is not `librispeech_asr`, the tokenizer is mostly likely "
-        "built on an lowercased corpus. In this case, set `tokenizer.do_lower_case` to ``False`.")
+    if tokenizer.do_lower_case and "librispeech" not in data_args.dataset_name:
+        raise ValueError(
+            "Setting the tokenizer attribute `do_lower_case` to `True` converts all input strings to "
+            "uppercase prior to tokenization. This should only be done when the tokenizer is built on an uppercased corpus,"
+            "i.e. for the dataset `librispeech_asr` only. If your dataset is not `librispeech_asr`, the tokenizer is mostly likely "
+            "built on an lowercased corpus. In this case, set `tokenizer.do_lower_case` to ``False`."
+        )
 
-    if training_args.precision == 'full_mixed':
+    if training_args.precision == "full_mixed":
         dtype = jnp.bfloat16
         training_args.mixed_precision = True
-    elif training_args.precision == 'half_mixed':
+    elif training_args.precision == "half_mixed":
         dtype = jnp.bfloat16
         training_args.mixed_precision = False
     else:
@@ -857,8 +884,8 @@ def main():
 
     # 6. Resample speech dataset ALWAYS
     raw_datasets = raw_datasets.cast_column(
-            data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
-        )
+        data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
+    )
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -872,7 +899,26 @@ def main():
     do_lower_case = data_args.do_lower_case
     chars_to_ignore = ', ? . ! - ; : " “ % ‘ ” �'.split(" ")
     chars_to_ignore_regex = f'[{"".join(chars_to_ignore)}]'
-    speech_disfluencies = {"{cough}": "", "{breath}": "", "{noise}": "", "{smack}": "", "{uh}": "", "{um}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
+    speech_disfluencies = {
+        "{cough}": "",
+        "{breath}": "",
+        "{noise}": "",
+        "{smack}": "",
+        "{uh}": "",
+        "{um}": "",
+        "<sil>": "",
+        "(1)": "",
+        "(2)": "",
+        "(3)": "",
+        "(4)": "",
+        "(5)": "",
+        "(6)": "",
+        "    ": " ",
+        "   ": " ",
+        "  ": " ",
+        "<s> ": "<s>",
+        " </s>": "</s>",
+    }
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -885,8 +931,11 @@ def main():
             raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
 
     if training_args.do_train and data_args.remove_punctuation:
+
         def remove_punctuation(batch):
-            batch[text_column_name] = re.sub(chars_to_ignore_regex, "", batch[text_column_name]).replace("'", "").replace('"', "")
+            batch[text_column_name] = (
+                re.sub(chars_to_ignore_regex, "", batch[text_column_name]).replace("'", "").replace('"', "")
+            )
 
         raw_datasets["train"] = raw_datasets["train"].map(
             remove_punctuation,
@@ -921,8 +970,8 @@ def main():
         input_str = input_str.replace('""', '"')
         if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in ['.', '?', '!']:
-                input_str = input_str + '.'
+            if input_str[-1] not in [".", "?", "!"]:
+                input_str = input_str + "."
         if data_args.dataset_name.split("/")[-1] == "tedlium" and data_args.dataset_config_name == "release1":
             # TEDLIUM Release 1 has an array of speech disfluencies that need removing
             for disfluency, replacement in speech_disfluencies.items():
@@ -961,10 +1010,14 @@ def main():
     # 8. Load Metric
     metric = load_metric("wer")
 
-    def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
+    def compute_metrics(logits: List[np.ndarray], label_ids: List[List[int]]):
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
 
-        pred_str = tokenizer.batch_decode(pred_ids)
+        pred_str = processor.batch_decode(logits).text
+        pred_str = (
+            [seq.lower() for seq in pred_str] if do_lower_case else pred_str
+        )  # TODO: check based on tokenizer.do_lower_case
+
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(padded_ids, group_tokens=False)
 
@@ -972,12 +1025,15 @@ def main():
 
         return {"wer": wer}, pred_str, label_str
 
-    # 9. save feature extractor, tokenizer and config
-    feature_extractor.save_pretrained(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
-    config.save_pretrained(training_args.output_dir)
-
-    processor = AutoProcessor.from_pretrained(training_args.output_dir)
+    # 9. Define processor with LM, and (maybe) save with the config
+    # TODO: load processor from pre-trained (in which case we couple the tokenizer and decoder together). Or define separately from feature_extractor, tokenizer and decoder as follows:
+    processor = Wav2Vec2ProcessorWithLM(
+        feature_extractor=feature_extractor,
+        tokenizer=tokenizer,
+        decoder=decoder,
+    )
+    # processor.save_pretrained(training_args.output_dir)
+    # config.save_pretrained(training_args.output_dir)
 
     data_collator = FlaxDataCollatorSpeechSeq2SeqWithPadding(
         processor=processor,
@@ -1030,7 +1086,7 @@ def main():
         num_train_samples = len(vectorized_datasets["train"])
         steps_per_epoch = num_train_samples // batch_size_per_update
         if max_steps > 0:
-            num_epochs = - (training_args.max_steps // - steps_per_epoch)
+            num_epochs = -(training_args.max_steps // -steps_per_epoch)
             total_train_steps = max_steps
         else:
             num_epochs = int(training_args.num_train_epochs)
@@ -1182,13 +1238,11 @@ def main():
         logits_mask = model._get_feature_vector_attention_mask(logits.shape[1], batch["attention_mask"])
         loss = ctc_loss(logits, logits_mask, labels, blank_id, loss_reduction="mean")
 
-        pred_ids = jnp.argmax(logits, axis=-1)
-
         # summarize metrics
         metrics = {"loss": loss}
         metrics = jax.lax.pmean(metrics, axis_name="batch")
         # metrics = to_fp32(metrics)
-        return metrics, pred_ids
+        return metrics, logits
 
     # Create parallel version of the train and eval step
     if training_args.do_train:
@@ -1214,8 +1268,8 @@ def main():
                 batch = shard(batch.data)
                 labels = batch["labels"]
 
-                metrics, pred_ids = p_eval_step(state.params, batch)
-                eval_preds.extend(jax.device_get(pred_ids.reshape(-1, pred_ids.shape[-1])))
+                metrics, logits = p_eval_step(state.params, batch)
+                eval_preds.extend(jax.device_get(logits.reshape(-1, *logits.shape[-2:])))
                 eval_metrics.append(metrics)
 
                 eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
@@ -1239,7 +1293,7 @@ def main():
             write_wandb_log(eval_metrics, step, prefix="eval")
             write_wandb_pred(pred_str, label_str, step)
             # if has_tensorboard and jax.process_index() == 0:
-                # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
+            # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
 
     def save_checkpoint(step):
         # save and push checkpoint to the hub
@@ -1249,7 +1303,6 @@ def main():
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
                 repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(step / 1000)}k", blocking=False)
-
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {num_train_samples}")
@@ -1293,7 +1346,7 @@ def main():
                     write_wandb_log(to_fp32(train_metric), cur_step, prefix="train")
                     # we won't log to tensorboard for now (it is fiddly logging param and grad norms on a layer-by-layer basis)
                     # if has_tensorboard and jax.process_index() == 0:
-                        # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
+                    # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
 
                     epochs.write(
                         f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
@@ -1312,7 +1365,9 @@ def main():
         save_checkpoint(cur_step)
 
     if training_args.do_eval:
-        run_evaluation(cur_step)
+        run_evaluation(
+            step=max_steps if max_steps > 0 else 0
+        )  # set step to max steps so that eval happens in alignment with training
 
     # TODO: collapse 'do_predict' into the run_evaluation function
     if training_args.do_predict:
@@ -1332,8 +1387,8 @@ def main():
                 batch = shard(batch.data)
                 labels = batch["labels"]
 
-                metrics, pred_ids = p_eval_step(state.params, batch)
-                eval_preds.extend(jax.device_get(pred_ids.reshape(-1, pred_ids.shape[-1])))
+                metrics, logits = p_eval_step(state.params, batch)
+                eval_preds.extend(jax.device_get(logits.reshape(-1, *logits.shape[-2:])))
                 eval_metrics.append(metrics)
 
                 eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
@@ -1354,10 +1409,12 @@ def main():
             epochs.desc = desc
 
             # Save metrics
-            write_wandb_log(eval_metrics, cur_step, prefix=split)
-            write_wandb_pred(pred_str, label_str, cur_step, prefix=split)
+            write_wandb_log(
+                eval_metrics, step=max_steps if max_steps > 0 else 0, prefix=split
+            )  # set step to max steps so that eval happens in alignment with training
+            write_wandb_pred(pred_str, label_str, step=max_steps if max_steps > 0 else 0, prefix=split)
             # if has_tensorboard and jax.process_index() == 0:
-                # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
+            # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
 
 if __name__ == "__main__":
