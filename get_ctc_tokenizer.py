@@ -23,8 +23,8 @@ tokenizer_name = "wav2vec2_ctc_tedlium_tokenizer"
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # chars to remove if `remove_punctuation` is set to True
 chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\{\}\(\)\<,\>]'
-# whether to remove speech disfluencies from input text
-remove_disfluencies = True
+remove_disfluencies = False
+# speech disfluencies to remove if `remove_punctuation` is set to True
 speech_disfluencies = {"{COUGH}": "", "{BREATH}": "", "{NOISE}": "", "{SMACK}": "", "{UH}": "", "{UM}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
 
 dataset = load_dataset(
@@ -38,15 +38,8 @@ dataset = load_dataset(
 # remove all data that is unnecessary to save RAM
 dataset = dataset.remove_columns(list(set(dataset.column_names) - set([text_column])))
 
-if remove_disfluencies:
-    def prepare_dataset(batch):
-        for disfluency, replacement in speech_disfluencies.items():
-            batch[text_column] = batch[text_column].replace(disfluency, replacement)
-        return batch
-    dataset = dataset.map(prepare_dataset, desc="removing speech disfluencies",)
-
 # define function to see stats about letters and to create vocab
-def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, remove_punctuation=False, cutoff_freq=0.0):
+def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, remove_punctuation=False, remove_disfluencies=False, cutoff_freq=0.0):
     def extract_all_chars(batch):
         all_text = " ".join(batch[text_column])
 
@@ -66,6 +59,14 @@ def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=Fals
         vocab, freqs = zip(*count_chars_dict)
 
         return {"vocab": list(vocab), "freqs": list(freqs)}
+
+    if remove_disfluencies:
+        def prepare_dataset(batch):
+            for disfluency, replacement in speech_disfluencies.items():
+                batch[text_column] = batch[text_column].replace(disfluency, replacement)
+            return batch
+
+        dataset = dataset.map(prepare_dataset, desc="removing speech disfluencies")
 
     dataset = dataset.map(
         extract_all_chars,
@@ -288,7 +289,7 @@ do_upper = False
 remove_punctuation = False
 cutoff_freq = 0.01
 
-vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, cutoff_freq=cutoff_freq)
+vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, remove_disfluencies=remove_disfluencies, cutoff_freq=cutoff_freq)
 
 # save vocab dict to be loaded into tokenizer
 with tempfile.TemporaryDirectory() as tmp:
