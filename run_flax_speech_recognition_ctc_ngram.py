@@ -25,7 +25,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, Tuple
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import datasets
 import numpy as np
@@ -42,22 +42,21 @@ from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, shard, shard_prng_key
 from huggingface_hub import Repository
-from models.modeling_flax_wav2vec2 import FlaxWav2Vec2ForCTC
 from models.configuration_wav2vec2 import Wav2Vec2Config
+from models.modeling_flax_wav2vec2 import FlaxWav2Vec2ForCTC
 from optax._src import linear_algebra
+from pyctcdecode import BeamSearchDecoderCTC
 from transformers import (
     AutoFeatureExtractor,
-    Wav2Vec2ProcessorWithLM,
     AutoTokenizer,
     HfArgumentParser,
     TrainingArguments,
+    Wav2Vec2ProcessorWithLM,
     is_tensorboard_available,
 )
 from transformers.file_utils import get_full_repo_name
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-
-from pyctcdecode import BeamSearchDecoderCTC
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -899,26 +898,7 @@ def main():
     do_lower_case = data_args.do_lower_case
     chars_to_ignore = ', ? . ! - ; : " “ % ‘ ” �'.split(" ")
     chars_to_ignore_regex = f'[{"".join(chars_to_ignore)}]'
-    speech_disfluencies = {
-        "{cough}": "",
-        "{breath}": "",
-        "{noise}": "",
-        "{smack}": "",
-        "{uh}": "",
-        "{um}": "",
-        "<sil>": "",
-        "(1)": "",
-        "(2)": "",
-        "(3)": "",
-        "(4)": "",
-        "(5)": "",
-        "(6)": "",
-        "    ": " ",
-        "   ": " ",
-        "  ": " ",
-        "<s> ": "<s>",
-        " </s>": "</s>",
-    }
+    speech_disfluencies = {"{cough}": "", "{breath}": "", "{noise}": "", "{smack}": "", "{uh}": "", "{um}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))

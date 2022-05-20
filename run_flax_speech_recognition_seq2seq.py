@@ -408,7 +408,6 @@ class MixedPrecisionTrainState(struct.PyTreeNode):
         return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
 
 
-
 def pad_to_max_length(data, tokenizer):
     # Get lengths of each row of data
     lens = np.array([len(i) for i in data])
@@ -649,7 +648,8 @@ def write_wandb_pred(pred_str, label_str, eval_ids, step, prefix="eval", top_ids
             str_data = np.array(str_data)
             str_data = str_data[str_data[:, 1] != str_data[:, 2]]
             wandb.log(
-                {f"{prefix}/step_{int(step / 1000)}k_incorrect": wandb.Table(columns=columns, data=str_data[:200000])}, step
+                {f"{prefix}/step_{int(step / 1000)}k_incorrect": wandb.Table(columns=columns, data=str_data[:200000])},
+                step,
             )
 
 
@@ -900,8 +900,8 @@ def main():
         input_str = input_str.replace('""', '"')
         if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in ['.', '?', '!']:
-                input_str = input_str + '.'
+            if input_str[-1] not in [".", "?", "!"]:
+                input_str = input_str + "."
         if data_args.dataset_name.split("/")[-1] == "tedlium" and data_args.dataset_config_name == "release1":
             # TEDLIUM Release 1 has an array of speech disfluencies that need removing
             for disfluency, replacement in speech_disfluencies.items():
@@ -951,7 +951,11 @@ def main():
     metric = load_metric("wer")
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
-        label_ids = pad_to_max_length(np.array(label_ids, dtype='object'), tokenizer) if pad_target_to_multiple_of else label_ids
+        label_ids = (
+            pad_to_max_length(np.array(label_ids, dtype="object"), tokenizer)
+            if pad_target_to_multiple_of
+            else label_ids
+        )
 
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
         # we do not want to group tokens when computing the metrics
@@ -983,7 +987,7 @@ def main():
         target_padding="longest",
         max_target_length=max_target_length,
         pad_input_to_multiple_of=pad_input_to_multiple_of,
-        pad_target_to_multiple_of=pad_target_to_multiple_of if pad_target_to_multiple_of else max_target_length
+        pad_target_to_multiple_of=pad_target_to_multiple_of if pad_target_to_multiple_of else max_target_length,
     )
 
     # Enable tensorboard only on the master node
@@ -1030,7 +1034,7 @@ def main():
         num_train_samples = len(vectorized_datasets["train"])
         steps_per_epoch = num_train_samples // batch_size_per_update
         if max_steps > 0:
-            num_epochs = - (training_args.max_steps // - steps_per_epoch)
+            num_epochs = -(training_args.max_steps // -steps_per_epoch)
             total_train_steps = max_steps
         else:
             num_epochs = int(training_args.num_train_epochs)
@@ -1261,13 +1265,17 @@ def main():
                     if not final_step:
                         generated_ids = p_generate_step(state.params, batch)
                         eval_preds.extend(
-                            jax.device_get(generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"]))
+                            jax.device_get(
+                                generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"])
+                            )
                         )
                     else:
                         generated_ids = p_final_generate_step(state.params, batch)
                         eval_preds.extend(
                             jax.device_get(
-                                generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
+                                generated_ids.reshape(
+                                    -1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"]
+                                )
                             )
                         )
                     eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
