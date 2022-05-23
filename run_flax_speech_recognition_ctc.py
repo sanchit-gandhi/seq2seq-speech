@@ -222,7 +222,7 @@ class DataTrainingArguments:
         },
     )
     eval_split_name: str = field(
-        default="test",
+        default="validation",
         metadata={
             "help": "The name of the training data set split to use (via the datasets library). Defaults to 'train'"
         },
@@ -1324,6 +1324,8 @@ def main():
 
     if training_args.do_train:
         save_checkpoint(cur_step)
+
+    cur_step = max_steps if max_steps > 0 else cur_step  # set step to max steps so that eval happens in alignment with training
 
     if training_args.do_eval:
         run_evaluation(cur_step)

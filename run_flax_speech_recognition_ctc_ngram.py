@@ -226,7 +226,7 @@ class DataTrainingArguments:
         },
     )
     eval_split_name: str = field(
-        default="test",
+        default="validation",
         metadata={
             "help": "The name of the training data set split to use (via the datasets library). Defaults to 'train'"
         },
