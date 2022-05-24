@@ -250,6 +250,12 @@ class DataTrainingArguments:
     remove_punctuation: bool = field(
         default=False, metadata={"help": "Whether or not to remove punctuation during training."}
     )
+    eval_metric: str = field(
+        default="wer",
+        metadata={
+            "help": "Metric with which to evaluate the performance of the speech recognition model. One of `['wer', 'cer']`, defaults to `'wer'`."
+        }
+    )
 
 
 # @flax.struct.dataclass
@@ -984,7 +990,7 @@ def main():
         return
 
     # 8. Load Metric
-    metric = load_metric("wer")
+    metric = load_metric(data_args.eval_metric)
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
