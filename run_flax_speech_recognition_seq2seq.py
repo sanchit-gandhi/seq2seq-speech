@@ -261,6 +261,12 @@ class DataTrainingArguments:
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
     )
+    eval_metric: str = field(
+        default="wer",
+        metadata={
+            "help": "Metric with which to evaluate the performance of the speech recognition model. One of `['wer', 'cer']`, defaults to `'wer'`."
+        }
+    )
 
 
 # @flax.struct.dataclass
@@ -958,7 +964,7 @@ def main():
         return
 
     # 8. Load Metric
-    metric = load_metric("wer")
+    metric = load_metric(data_args.eval_metric)
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
         label_ids = (
