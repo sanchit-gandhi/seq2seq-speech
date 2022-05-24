@@ -999,9 +999,9 @@ def main():
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(padded_ids, group_tokens=False)
 
-        wer = metric.compute(predictions=pred_str, references=label_str)
+        error_rate = metric.compute(predictions=pred_str, references=label_str)
 
-        return {"wer": wer}, pred_str, label_str
+        return {data_args.eval_metric: error_rate}, pred_str, label_str
 
     # 9. save feature extractor, tokenizer and config
     feature_extractor.save_pretrained(training_args.output_dir)
@@ -1257,12 +1257,12 @@ def main():
             eval_metrics = to_fp32(eval_metrics)
 
             # always run compute metrics
-            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
-            eval_metrics.update(wer_metric)
-            wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
+            error_rate_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
+            eval_metrics.update(error_rate_metric)
+            error_rate_desc = " ".join([f"Eval {key}: {value} |" for key, value in error_rate_metric.items()])
 
             # Print metrics and update progress bar
-            desc = f"Step... ({step}/{total_train_steps} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            desc = f"Step... ({step}/{total_train_steps} | Eval Loss: {eval_metrics['loss']} | {error_rate_desc})"
             epochs.write(desc)
             epochs.desc = desc
 
@@ -1376,12 +1376,12 @@ def main():
             eval_metrics = to_fp32(eval_metrics)
 
             # always run compute metrics
-            wer_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
-            eval_metrics.update(wer_metric)
-            wer_desc = " ".join([f"Eval {key}: {value} |" for key, value in wer_metric.items()])
+            error_rate_metric, pred_str, label_str = compute_metrics(eval_preds, eval_labels)
+            eval_metrics.update(error_rate_metric)
+            error_rate_desc = " ".join([f"Eval {key}: {value} |" for key, value in error_rate_metric.items()])
 
             # Print metrics and update progress bar
-            desc = f"Step... ({cur_step}/{total_train_steps} | Eval Loss: {eval_metrics['loss']} | {wer_desc})"
+            desc = f"Step... ({cur_step}/{total_train_steps} | Eval Loss: {eval_metrics['loss']} | {error_rate_desc})"
             epochs.write(desc)
             epochs.desc = desc
 
