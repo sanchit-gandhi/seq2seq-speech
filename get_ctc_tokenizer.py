@@ -8,9 +8,9 @@ import tempfile
 from transformers import Wav2Vec2CTCTokenizer
 
 # which dataset
-dataset_name = "LIUM/tedlium"
+dataset_name = "internal-data/gigaspeech-data"
 # which config
-dataset_config = "release3"
+dataset_config = "L"
 # which split => @Sanchit, we should only use the train split for "fairness"
 split = "train"
 # in case the dataset requires access like CV9
@@ -18,7 +18,7 @@ use_auth_token = True
 # name of the text data column
 text_column = "text"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_tedlium_tokenizer"
+tokenizer_name = "wav2vec2_ctc_gs_tokenizer"
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # chars to remove if `remove_punctuation` is set to True
