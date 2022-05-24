@@ -928,11 +928,19 @@ def main():
         return input_str != "ignore_time_segment_in_scoring"
 
     if data_args.dataset_name.split("/")[-1] == "tedlium":
-        raw_datasets = raw_datasets.filter(
-            is_target_labels,
-            num_proc=num_workers,
-            input_columns=[text_column_name],
-        )
+        if training_args.do_eval:
+            raw_datasets["eval"] = raw_datasets["eval"].filter(
+                is_target_labels,
+                num_proc=num_workers,
+                input_columns=[text_column_name],
+            )
+        if training_args.do_predict:
+            for split in test_split:
+                raw_datasets[split] = raw_datasets[split].filter(
+                    is_target_labels,
+                    num_proc=num_workers,
+                    input_columns=[text_column_name],
+                )
 
     def prepare_dataset(batch):
         # process audio
@@ -947,7 +955,8 @@ def main():
         if input_str.startswith('"') and input_str.endswith('"'):
             # we can remove trailing quotation marks as they do not affect the transcription
             input_str = input_str[1:-1]
-        input_str = input_str.replace('""', '"')
+        # replace double quotation marks and spaced apostrophes
+        input_str = input_str.replace('""', '"').replace(" '", "'")
         if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
             if input_str[-1] not in [".", "?", "!"]:
@@ -956,6 +965,7 @@ def main():
             # TEDLIUM Release 1 has an array of speech disfluencies that need removing
             for disfluency, replacement in speech_disfluencies.items():
                 input_str = input_str.replace(disfluency, replacement)
+        input_str = input_str.replace("<unk>", "")  # delete the <unk> token from the input text
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch
