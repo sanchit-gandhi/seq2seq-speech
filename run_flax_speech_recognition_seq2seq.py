@@ -1424,7 +1424,7 @@ def main():
 
             if training_args.eval_steps == 0 and (epoch + 1) != num_epochs:
                 # run evaluation at the end of the epoch if eval steps are not specified
-                run_evaluation(cur_step, final_step=True)
+                run_evaluation(cur_step, final_step=False)
                 save_checkpoint(cur_step)
 
     if training_args.do_train:
