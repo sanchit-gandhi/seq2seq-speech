@@ -250,12 +250,6 @@ class DataTrainingArguments:
     remove_punctuation: bool = field(
         default=False, metadata={"help": "Whether or not to remove punctuation during training."}
     )
-    eval_metric: str = field(
-        default="wer",
-        metadata={
-            "help": "Metric with which to evaluate the performance of the speech recognition model. One of `['wer', 'cer']`, defaults to `'wer'`."
-        }
-    )
 
 
 # @flax.struct.dataclass
@@ -989,8 +983,9 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {cache}.")
         return
 
-    # 8. Load Metric
-    metric = load_metric(data_args.eval_metric)
+    # 8. Load Metrics
+    wer_metric = load_metric("wer")
+    cer_metric = load_metric("cer")
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
         padded_ids = np.where(np.asarray(label_ids) == -100, tokenizer.pad_token_id, np.asarray(label_ids))
@@ -999,9 +994,10 @@ def main():
         # we do not want to group tokens when computing the metrics
         label_str = tokenizer.batch_decode(padded_ids, group_tokens=False)
 
-        error_rate = metric.compute(predictions=pred_str, references=label_str)
+        wer = wer_metric.compute(predictions=pred_str, references=label_str)
+        cer = cer_metric.compute(predictions=pred_str, references=label_str)
 
-        return {data_args.eval_metric: error_rate}, pred_str, label_str
+        return {"wer": wer, "cer": cer}, pred_str, label_str
 
     # 9. save feature extractor, tokenizer and config
     feature_extractor.save_pretrained(training_args.output_dir)
@@ -1337,6 +1333,11 @@ def main():
 
                 if cur_step % training_args.save_steps == 0:
                     save_checkpoint(cur_step)
+
+            if training_args.eval_steps == 0 and (epoch + 1) != num_epochs:
+                # run evaluation at the end of the epoch if eval steps are not specified
+                run_evaluation(cur_step)
+                save_checkpoint(cur_step)
 
     if training_args.do_train:
         save_checkpoint(cur_step)
