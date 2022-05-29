@@ -53,7 +53,7 @@ from transformers import (
     is_tensorboard_available,
 )
 from transformers.file_utils import get_full_repo_name
-from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -260,12 +260,6 @@ class DataTrainingArguments:
         metadata={
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
-    )
-    eval_metric: str = field(
-        default="wer",
-        metadata={
-            "help": "Metric with which to evaluate the performance of the speech recognition model. One of `['wer', 'cer']`, defaults to `'wer'`."
-        }
     )
 
 
@@ -783,7 +777,7 @@ def main():
             f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
         )
 
-    if data_args.id_column_name not in next(iter(raw_datasets.values())).column_names:
+    if data_args.log_first_ids and data_args.id_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
             f"--id_column_name {data_args.id_column_name} not found in dataset '{data_args.dataset_name}'. "
             "Make sure to set `--id_column_name` to the correct id column - one of "
@@ -963,8 +957,9 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {cache}.")
         return
 
-    # 8. Load Metric
-    metric = load_metric(data_args.eval_metric)
+    # 8. Load Metrics
+    wer_metric = load_metric("wer")
+    cer_metric = load_metric("cer")
 
     def compute_metrics(pred_ids: List[List[int]], label_ids: List[List[int]]):
         label_ids = (
@@ -985,9 +980,10 @@ def main():
             for beam in reversed(range(num_beams))
         ]
         # compute word/character error rate for top beam
-        error_rate = metric.compute(predictions=pred_str[0], references=label_str)
+        wer = wer_metric.compute(predictions=pred_str[0], references=label_str)
+        cer = cer_metric.compute(predictions=pred_str[0], references=label_str)
 
-        return {data_args.eval_metric: error_rate}, pred_str, label_str
+        return {"wer": wer, "cer": cer}, pred_str, label_str
 
     # 9. Save feature extractor, tokenizer and config
     feature_extractor.save_pretrained(training_args.output_dir)
@@ -1393,10 +1389,16 @@ def main():
                     break
 
                 if cur_step % training_args.eval_steps == 0:
-                    run_evaluation(cur_step, final_step=False)
+                    # run beam search at each eval step
+                    run_evaluation(cur_step, final_step=True)
 
                 if cur_step % training_args.save_steps == 0:
                     save_checkpoint(cur_step)
+
+            if training_args.eval_steps == 0 and (epoch + 1) != num_epochs:
+                # run evaluation at the end of the epoch if eval steps are not specified
+                run_evaluation(cur_step, final_step=True)
+                save_checkpoint(cur_step)
 
     if training_args.do_train:
         save_checkpoint(cur_step)
