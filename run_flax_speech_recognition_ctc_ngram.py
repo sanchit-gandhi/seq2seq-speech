@@ -1076,6 +1076,10 @@ def main():
 
     # 10. Handle the repository creation
     if training_args.push_to_hub:
+        with open(os.path.join(training_args.output_dir, ".gitattributes"), "r+") as f:
+            git_lfs_extensions = f.read()
+            if "*.wandb" not in git_lfs_extensions:
+                f.write("*.wandb filter=lfs diff=lfs merge=lfs -text")
         if training_args.hub_model_id is None:
             repo_name = get_full_repo_name(
                 Path(training_args.output_dir).absolute().name, token=training_args.hub_token
@@ -1316,7 +1320,7 @@ def main():
             model.save_pretrained(training_args.output_dir, params=params)
             tokenizer.save_pretrained(training_args.output_dir)
             if training_args.push_to_hub:
-                repo.push_to_hub(commit_message=f"Saving weights and logs of step {int(step / 1000)}k", blocking=False)
+                repo.push_to_hub(commit_message=f"{wandb.run.id}: saving weights and logs of step {int(step / 1000)}k", blocking=False)
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {num_train_samples}")
