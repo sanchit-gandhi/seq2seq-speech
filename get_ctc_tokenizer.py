@@ -6,11 +6,12 @@ import os
 import re
 import tempfile
 from transformers import Wav2Vec2CTCTokenizer
+from run_flax_speech_recognition_ami_ctc import chunk_audio, chunk_into_max_n_seconds
 
 # which dataset
-dataset_name = "internal-data/gigaspeech-data"
+dataset_name = "ami"
 # which config
-dataset_config = "L"
+dataset_config = "headset-single"
 # which split => @Sanchit, we should only use the train split for "fairness"
 split = "train"
 # in case the dataset requires access like CV9
@@ -18,28 +19,36 @@ use_auth_token = True
 # name of the text data column
 text_column = "text"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_gs_tokenizer"
+tokenizer_name = "wav2vec2_ctc_ami_tokenizer"
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
-# chars to remove if `remove_punctuation` is set to True
-chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\{\}\(\)\<,\>]'
-remove_disfluencies = False
-# speech disfluencies to remove if `remove_punctuation` is set to True
-speech_disfluencies = {"{COUGH}": "", "{BREATH}": "", "{NOISE}": "", "{SMACK}": "", "{UH}": "", "{UM}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
+# For GigaSpeech, we need to convert spelled out punctuation to symbolic form
+gigaspeech_punctuation = {"<comma>": ",", "<period>": ".", "<questionmark>": "?", "<exclamationpoint": "!"}
+# chars to remove - these get filtered out in our data preprocessing script during training
+preprocessing_chars_to_remove = ['{', '}', '(', ')', '<', '>', '_1', '[', ']']
+# additional chars to remove if `remove_punctuation` is set to True
+additional_chars_to_remove_regex = '[,?.!-;:"“%‘”�{}()<>' + "']"
+SAMPLE_RATE = 16_000
+MAX_LENGTH_IN_SECONDS = 20.0
 
 dataset = load_dataset(
     dataset_name,
     dataset_config,
     split=split,
     use_auth_token=use_auth_token,
-    cache_dir=dataset_cache_dir
+    cache_dir=dataset_cache_dir,
 )
+
+if dataset_name == "ami":
+    dataset = dataset.map(chunk_audio, batched=True, batch_size=1, remove_columns=dataset.column_names, desc="chunk audio")
+    dataset = dataset.map(chunk_into_max_n_seconds, batched=True, batch_size=1, remove_columns=dataset.column_names,
+                      num_proc=64, desc="chunk by time")
 
 # remove all data that is unnecessary to save RAM
 dataset = dataset.remove_columns(list(set(dataset.column_names) - set([text_column])))
 
 # define function to see stats about letters and to create vocab
-def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, remove_punctuation=False, remove_disfluencies=False, cutoff_freq=0.0):
+def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=False, do_upper=False, remove_punctuation=False, cutoff_freq=0.0):
     def extract_all_chars(batch):
         all_text = " ".join(batch[text_column])
 
@@ -49,8 +58,13 @@ def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=Fals
             all_text = all_text.lower()
         if do_upper:
             all_text = all_text.upper()
+        for punctuation, replacement in gigaspeech_punctuation.items():
+            all_text = all_text.replace(punctuation.lower(), replacement)
+            all_text = all_text.replace(punctuation.upper(), replacement)
+        for char in preprocessing_chars_to_remove:
+            all_text = all_text.replace(char, "")
         if remove_punctuation:
-            all_text = re.sub(chars_to_remove_regex, '', all_text)
+            all_text = re.sub(additional_chars_to_remove_regex, '', all_text)
 
         count_chars_dict = Counter(list(all_text))
         # sort by freq
@@ -59,14 +73,6 @@ def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=Fals
         vocab, freqs = zip(*count_chars_dict)
 
         return {"vocab": list(vocab), "freqs": list(freqs)}
-
-    if remove_disfluencies:
-        def prepare_dataset(batch):
-            for disfluency, replacement in speech_disfluencies.items():
-                batch[text_column] = batch[text_column].replace(disfluency, replacement)
-            return batch
-
-        dataset = dataset.map(prepare_dataset, desc="removing speech disfluencies")
 
     dataset = dataset.map(
         extract_all_chars,
@@ -289,7 +295,7 @@ do_upper = False
 remove_punctuation = False
 cutoff_freq = 0.01
 
-vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, remove_disfluencies=remove_disfluencies, cutoff_freq=cutoff_freq)
+vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, cutoff_freq=cutoff_freq)
 
 # save vocab dict to be loaded into tokenizer
 with tempfile.TemporaryDirectory() as tmp:
