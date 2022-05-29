@@ -20,6 +20,7 @@ Fine-tuning the Flax library models for sequence to sequence speech recognition.
 
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -860,7 +861,12 @@ def main():
     id_column_name = data_args.id_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
-    speech_disfluencies = {"{cough}": "", "{breath}": "", "{noise}": "", "{smack}": "", "{uh}": "", "{um}": "", "<sil>": "", "(1)": "", "(2)": "", "(3)": "", "(4)": "", "(5)": "", "(6)": "", "    ": " ", "   ": " ", "  ": " ", "<s> ": "<s>", " </s>": "</s>"}
+    gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint": "!"}
+    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
+                    "[vocalized-noise]", "_1"]
+    swb_punctuations = ["{", "}", "[", "]-", "]"]
+    ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
+                       "[vocalized-noise]", ""]
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -874,22 +880,13 @@ def main():
 
     # filter data where the targets are ignored in scoring
     def is_target_labels(input_str):
-        return input_str != "ignore_time_segment_in_scoring"
+        return input_str.lower() not in ignore_segments
 
-    if data_args.dataset_name.split("/")[-1] == "tedlium":
-        if training_args.do_eval:
-            raw_datasets["eval"] = raw_datasets["eval"].filter(
-                is_target_labels,
-                num_proc=num_workers,
-                input_columns=[text_column_name],
-            )
-        if training_args.do_predict:
-            for split in test_split:
-                raw_datasets[split] = raw_datasets[split].filter(
-                    is_target_labels,
-                    num_proc=num_workers,
-                    input_columns=[text_column_name],
-                )
+    raw_datasets = raw_datasets.filter(
+            is_target_labels,
+            num_proc=num_workers,
+            input_columns=[text_column_name],
+        )
 
     def prepare_dataset(batch):
         # process audio
@@ -898,24 +895,50 @@ def main():
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
         batch["input_length"] = len(batch["input_values"])
-        batch["input_id"] = batch[id_column_name]
+        batch["input_id"] = batch[id_column_name] if data_args.log_first_ids else None
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
+
+        # Common Voice 9
         if input_str.startswith('"') and input_str.endswith('"'):
             # we can remove trailing quotation marks as they do not affect the transcription
             input_str = input_str[1:-1]
-        # replace double quotation marks and spaced apostrophes
-        input_str = input_str.replace('""', '"').replace(" '", "'")
+        # normalize quotation marks
+        input_str = re.sub(r'["“”]', '"', input_str)
+        # normalize apostrophes
+        input_str = re.sub(r"[’']", "'", input_str)
+        # normalize hyphens
+        input_str = re.sub(r"[—–]", "-", input_str)
+        # replace double quotation marks with single
+        input_str = input_str.replace('""', '"')
         if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
             if input_str[-1] not in [".", "?", "!"]:
                 input_str = input_str + "."
-        if data_args.dataset_name.split("/")[-1] == "tedlium" and data_args.dataset_config_name == "release1":
-            # TEDLIUM Release 1 has an array of speech disfluencies that need removing
-            for disfluency, replacement in speech_disfluencies.items():
-                input_str = input_str.replace(disfluency, replacement)
-        input_str = input_str.replace("<unk>", "")  # delete the <unk> token from the input text
+
+        # TEDLIUM-3
+        # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
+        input_str = input_str.replace("<unk>", "").replace(" '", "'")
+
+        # GigaSpeech - convert spelled out punctuation to symbolic form
+        for punctuation, replacement in gigaspeech_punctuation.items():
+            input_str = input_str.replace(punctuation, replacement)
+
+        # SWB
+        for disfluency in swb_disfluencies:
+            input_str = input_str.replace(disfluency, "")
+        # remove parenthesised text (test data only)
+        input_str = re.sub("[\(].*?[\)]", "", input_str).replace("  ", " ")
+        for punctuation in swb_punctuations:
+            input_str = input_str.replace(punctuation, "")
+        # replace anomalous words with their correct transcriptions
+        split_str = input_str.split("/")
+        if len(split_str) > 1:
+            input_str = " ".join(
+                [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+        # Finally, we tokenize the processed text
         batch["labels"] = tokenizer(input_str).input_ids
         batch["labels_length"] = len(batch["labels"])
         return batch
