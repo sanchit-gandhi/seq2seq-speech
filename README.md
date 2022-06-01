@@ -39,35 +39,4 @@ tokenizer = AutoTokenizer.from_pretrained(decoder_id)
 tokenizer.save_pretrained("./")
 ```
 
-To train the model on [Librispeech ASR](https://huggingface.co/datasets/librispeech_asr) in default precision, run the bash script provided below:
-```bash
-#!/usr/bin/env bash
-python run_flax_speech_recognition_seq2seq.py \
-        --dataset_name="librispeech_asr" \
-        --model_name_or_path="./" \
-        --dataset_config_name="clean" \
-        --train_split_name="train.100" \
-        --eval_split_name="validation" \
-        --output_dir="./" \
-        --preprocessing_num_workers="16" \
-        --length_column_name="input_length" \
-        --overwrite_output_dir \
-        --num_train_epochs="5" \
-        --per_device_train_batch_size="2" \
-        --per_device_eval_batch_size="2" \
-        --gradient_accumulation_steps="1" \
-        --logging_steps="25" \
-        --max_duration_in_seconds="15" \
-        --max_target_length="128" \
-        --generation_max_length="40" \
-        --generation_num_beams="1" \
-        --learning_rate="1e-4" \
-        --warmup_steps="500" \
-        --text_column_name="text" \
-        --save_total_limit="1" \
-        --freeze_feature_encoder \
-        --predict_with_generate \
-        --do_lower_case \
-        --do_eval \
-        --do_train
-```
+To train the model on [Librispeech ASR](https://huggingface.co/datasets/librispeech_asr), run the template bash script [`run_seq2seq_dummy.sh`](https://github.com/sanchit-gandhi/seq2seq-speech/blob/main/run_seq2seq_dummy.sh).
