@@ -1524,7 +1524,7 @@ def main():
                 if cur_step % total_train_steps == 0:
                     break
 
-                if cur_step % training_args.eval_steps == 0:
+                if training_args.eval_steps and cur_step % training_args.eval_steps == 0:
                     # run beam search at each eval step
                     run_evaluation(cur_step, final_step=False)
 

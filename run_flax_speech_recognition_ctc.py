@@ -1360,7 +1360,7 @@ def main():
                 if cur_step % total_train_steps == 0:
                     break
 
-                if cur_step % training_args.eval_steps == 0:
+                if training_args.eval_steps and cur_step % training_args.eval_steps == 0:
                     run_evaluation(cur_step)
 
                 if cur_step % training_args.save_steps == 0:
