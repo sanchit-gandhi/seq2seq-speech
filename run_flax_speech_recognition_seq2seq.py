@@ -194,7 +194,7 @@ class DataTrainingArguments:
         },
     )
     min_target_length: Optional[int] = field(
-        default=0,
+        default=2,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
             "than this will be filtered."
@@ -929,7 +929,7 @@ def main():
         for disfluency in swb_disfluencies:
             input_str = input_str.replace(disfluency, "")
         # remove parenthesised text (test data only)
-        input_str = re.sub("[\(].*?[\)]", "", input_str).replace("  ", " ")
+        input_str = re.sub("[\(].*?[\)]", "", input_str)
         for punctuation in swb_punctuations:
             input_str = input_str.replace(punctuation, "")
         # replace anomalous words with their correct transcriptions
@@ -937,6 +937,12 @@ def main():
         if len(split_str) > 1:
             input_str = " ".join(
                 [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+        # JIWER compliance
+        # remove multiple spaces
+        input_str = re.sub(r"\s\s+", " ", input_str)
+        # strip trailing spaces
+        input_str = input_str.strip()
 
         # Finally, we tokenize the processed text
         batch["labels"] = tokenizer(input_str).input_ids
@@ -1168,7 +1174,7 @@ def main():
 
         grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
 
-        if gradient_accumulation_steps == 1 or training_args.multisteps:
+        if gradient_accumulation_steps == 1:
             (loss, num_labels), grad = grad_fn(to_dtype(state.params), batch)
 
         # Custom gradient accumulation
@@ -1415,9 +1421,9 @@ def main():
                 if cur_step % total_train_steps == 0:
                     break
 
-                if cur_step % training_args.eval_steps == 0:
+                if training_args.eval_steps and cur_step % training_args.eval_steps == 0:
                     # run beam search at each eval step
-                    run_evaluation(cur_step, final_step=True)
+                    run_evaluation(cur_step, final_step=False)
 
                 if cur_step % training_args.save_steps == 0:
                     save_checkpoint(cur_step)

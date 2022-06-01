@@ -265,6 +265,10 @@ class DataTrainingArguments:
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
     )
+    max_chunk_in_seconds: float = field(
+        default=None,
+        metadata={"help": "Max chunk in seconds"}
+    )
 
 
 # @flax.struct.dataclass
@@ -288,7 +292,7 @@ class FlaxSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
         },
     )
     generation_length_penalty: float = field(
-        default=1,
+        default=1.2,
         metadata={
             "help": "Exponential penalty to the length. 1.0 (default) means no penalty. Set to values < 1.0 in order to encourage the model"
             "to generate shorter sequences, to a value > 1.0 in order to encourage the model to produce longer sequences."
@@ -600,86 +604,89 @@ def data_loader(dataset, batch_size, rng, sampler, collator):
         batch = shard(batch.data)
         yield batch
 
-SAMPLE_RATE = 16_000
 
-def chunk_audio(batch):
-    new_batch = {
-        "audio": [],
-        "words": [],
-        "speaker": [],
-        "lengths": [],
-        "word_start_times": [],
-        "segment_start_times": [],
-    }
+class FlaxAMIChunkingPreprocessor:
+    def __init__(self, sample_rate=16_000, max_seconds=20.0):
+        self.sample_rate = sample_rate
+        self.max_seconds = max_seconds
 
-    audio, _ = librosa.load(batch["file"][0], sr=SAMPLE_RATE)
+    def chunk_audio(self, batch):
+        new_batch = {
+            "audio": [],
+            "words": [],
+            "speaker": [],
+            "lengths": [],
+            "word_start_times": [],
+            "segment_start_times": [],
+        }
 
-    word_idx = 0
-    num_words = len(batch["words"][0])
-    for segment_idx in range(len(batch["segment_start_times"][0])):
-        words = []
-        word_start_times = []
-        start_time = batch["segment_start_times"][0][segment_idx]
-        end_time = batch["segment_end_times"][0][segment_idx]
+        audio, _ = librosa.load(batch["file"][0], sr=self.sample_rate)
 
-        # go back and forth with word_idx since segments overlap with each other
-        while (word_idx > 1) and (start_time < batch["word_end_times"][0][word_idx - 1]):
-            word_idx -= 1
-
-        while word_idx < num_words and (start_time > batch["word_start_times"][0][word_idx]):
-            word_idx += 1
-
-        new_batch["audio"].append(audio[int(start_time * SAMPLE_RATE): int(end_time * SAMPLE_RATE)])
-
-        while word_idx < num_words and batch["word_start_times"][0][word_idx] < end_time:
-            words.append(batch["words"][0][word_idx])
-            word_start_times.append(batch["word_start_times"][0][word_idx])
-            word_idx += 1
-
-        new_batch["lengths"].append(end_time - start_time)
-        new_batch["words"].append(words)
-        new_batch["speaker"].append(batch["segment_speakers"][0][segment_idx])
-        new_batch["word_start_times"].append(word_start_times)
-
-        new_batch["segment_start_times"].append(batch["segment_start_times"][0][segment_idx])
-
-    return new_batch
-
-MAX_LENGTH_IN_SECONDS = 20.0
-
-def chunk_into_max_n_seconds(batch):
-    new_batch = {
-        "audio": [],
-        "text": [],
-    }
-
-    sample_length = batch["lengths"][0]
-    segment_start = batch["segment_start_times"][0]
-
-    if sample_length > MAX_LENGTH_IN_SECONDS:
-        num_chunks_per_sample = math.ceil(sample_length / MAX_LENGTH_IN_SECONDS)
-        avg_chunk_length = sample_length / num_chunks_per_sample
+        word_idx = 0
         num_words = len(batch["words"][0])
+        for segment_idx in range(len(batch["segment_start_times"][0])):
+            words = []
+            word_start_times = []
+            start_time = batch["segment_start_times"][0][segment_idx]
+            end_time = batch["segment_end_times"][0][segment_idx]
 
-        # start chunking by times
-        start_word_idx = end_word_idx = 0
-        chunk_start_time = 0
-        for n in range(num_chunks_per_sample):
-            while (end_word_idx < num_words - 1) and (
-                    batch["word_start_times"][0][end_word_idx] < segment_start + (n + 1) * avg_chunk_length):
-                end_word_idx += 1
+            # go back and forth with word_idx since segments overlap with each other
+            while (word_idx > 1) and (start_time < batch["word_end_times"][0][word_idx - 1]):
+                word_idx -= 1
 
-            chunk_end_time = int((batch["word_start_times"][0][end_word_idx] - segment_start) * SAMPLE_RATE)
-            new_batch["audio"].append(batch["audio"][0][chunk_start_time: chunk_end_time])
-            new_batch["text"].append(" ".join(batch["words"][0][start_word_idx: end_word_idx]))
+            while word_idx < num_words and (start_time > batch["word_start_times"][0][word_idx]):
+                word_idx += 1
 
-            chunk_start_time = chunk_end_time
-            start_word_idx = end_word_idx
-    else:
-        new_batch["audio"].append(batch["audio"][0])
-        new_batch["text"].append(" ".join(batch["words"][0]))
+            new_batch["audio"].append(audio[int(start_time * self.sample_rate): int(end_time * self.sample_rate)])
 
-    return new_batch
+            while word_idx < num_words and batch["word_start_times"][0][word_idx] < end_time:
+                words.append(batch["words"][0][word_idx])
+                word_start_times.append(batch["word_start_times"][0][word_idx])
+                word_idx += 1
+
+            new_batch["lengths"].append(end_time - start_time)
+            new_batch["words"].append(words)
+            new_batch["speaker"].append(batch["segment_speakers"][0][segment_idx])
+            new_batch["word_start_times"].append(word_start_times)
+
+            new_batch["segment_start_times"].append(batch["segment_start_times"][0][segment_idx])
+
+        return new_batch
+
+    def chunk_into_max_n_seconds(self, batch):
+        new_batch = {
+            "audio": [],
+            "text": [],
+        }
+
+        sample_length = batch["lengths"][0]
+        segment_start = batch["segment_start_times"][0]
+
+        if sample_length > self.max_seconds:
+            num_chunks_per_sample = math.ceil(sample_length / self.max_seconds)
+            avg_chunk_length = sample_length / num_chunks_per_sample
+            num_words = len(batch["words"][0])
+
+            # start chunking by times
+            start_word_idx = end_word_idx = 0
+            chunk_start_time = 0
+            for n in range(num_chunks_per_sample):
+                while (end_word_idx < num_words - 1) and (
+                        batch["word_start_times"][0][end_word_idx] < segment_start + (n + 1) * avg_chunk_length):
+                    end_word_idx += 1
+
+                chunk_end_time = int((batch["word_start_times"][0][end_word_idx] - segment_start) * self.sample_rate)
+                new_batch["audio"].append(batch["audio"][0][chunk_start_time: chunk_end_time])
+                new_batch["text"].append(" ".join(batch["words"][0][start_word_idx: end_word_idx]))
+
+                chunk_start_time = chunk_end_time
+                start_word_idx = end_word_idx
+        else:
+            new_batch["audio"].append(batch["audio"][0])
+            new_batch["text"].append(" ".join(batch["words"][0]))
+
+        return new_batch
+
 
 def write_train_metric(summary_writer, train_metrics, train_time, step):
     summary_writer.scalar("train_time", train_time, step)
@@ -719,10 +726,12 @@ def write_wandb_pred(pred_str, label_str, eval_ids, step, prefix="eval", top_ids
         num_beams = len(pred_str)
         # convert str data to a wandb compatible format
         str_data = []
-        for id in top_ids:
+        """for id in top_ids:
             if id in eval_ids:
                 idx = eval_ids.index(id)
-                str_data.append([eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)])
+                str_data.append([eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)])"""
+        for idx in range(len(label_str)):
+            str_data.append([eval_ids[idx], label_str[idx]] + [pred_str[beam][idx] for beam in range(num_beams)])
         columns = ["id", "label_str"] + [f"beam_{i + 1}" for i in range(num_beams)]
         wandb.log(
             {f"{prefix}/step_{int(step / 1000)}k": wandb.Table(columns=columns, data=str_data[:50])},
@@ -843,36 +852,6 @@ def main():
             "training, evaluation or prediction has to be done."
         )
 
-    raw_datasets = raw_datasets.map(chunk_audio, batched=True, batch_size=1,
-                                        remove_columns=raw_datasets["train"].column_names, desc="chunk audio")
-    raw_datasets = raw_datasets.map(chunk_into_max_n_seconds, batched=True, batch_size=1, remove_columns=raw_datasets["train"].column_names,
-                      num_proc=64, desc="chunk by time")
-
-    # if not training, there is no need to run multiple epochs
-    if not training_args.do_train:
-        training_args.num_train_epochs = 1
-
-    if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
-        raise ValueError(
-            f"--audio_column_name '{data_args.audio_column_name}' not found in dataset '{data_args.dataset_name}'. "
-            "Make sure to set `--audio_column_name` to the correct audio column - one of "
-            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
-        )
-
-    if data_args.text_column_name not in next(iter(raw_datasets.values())).column_names:
-        raise ValueError(
-            f"--text_column_name {data_args.text_column_name} not found in dataset '{data_args.dataset_name}'. "
-            "Make sure to set `--text_column_name` to the correct text column - one of "
-            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
-        )
-
-    if data_args.log_first_ids and data_args.id_column_name not in next(iter(raw_datasets.values())).column_names:
-        raise ValueError(
-            f"--id_column_name {data_args.id_column_name} not found in dataset '{data_args.dataset_name}'. "
-            "Make sure to set `--id_column_name` to the correct id column - one of "
-            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
-        )
-
     # 5. Load pretrained model, tokenizer, and feature extractor
     #
     # Distributed training:
@@ -956,6 +935,40 @@ def main():
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", ""]
 
+    max_seconds = data_args.max_chunk_in_seconds if data_args.max_chunk_in_seconds else data_args.max_duration_in_seconds
+
+    ami_processor = FlaxAMIChunkingPreprocessor(max_seconds=max_seconds)
+
+    raw_datasets = raw_datasets.map(ami_processor.chunk_audio, batched=True, batch_size=1,
+                                        remove_columns=raw_datasets[next(iter(raw_datasets))].column_names, desc="chunk audio")
+    raw_datasets = raw_datasets.map(ami_processor.chunk_into_max_n_seconds, batched=True, batch_size=1, remove_columns=raw_datasets[next(iter(raw_datasets))].column_names,
+                      num_proc=64, desc="chunk by time")
+
+    # if not training, there is no need to run multiple epochs
+    if not training_args.do_train:
+        training_args.num_train_epochs = 1
+
+    if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
+        raise ValueError(
+            f"--audio_column_name '{data_args.audio_column_name}' not found in dataset '{data_args.dataset_name}'. "
+            "Make sure to set `--audio_column_name` to the correct audio column - one of "
+            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
+        )
+
+    if data_args.text_column_name not in next(iter(raw_datasets.values())).column_names:
+        raise ValueError(
+            f"--text_column_name {data_args.text_column_name} not found in dataset '{data_args.dataset_name}'. "
+            "Make sure to set `--text_column_name` to the correct text column - one of "
+            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
+        )
+
+    if data_args.log_first_ids and data_args.id_column_name not in next(iter(raw_datasets.values())).column_names:
+        raise ValueError(
+            f"--id_column_name {data_args.id_column_name} not found in dataset '{data_args.dataset_name}'. "
+            "Make sure to set `--id_column_name` to the correct id column - one of "
+            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
+        )
+
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
 
@@ -981,11 +994,11 @@ def main():
     def prepare_dataset(batch):
         # process audio
         sample = batch[audio_column_name]
-        inputs = feature_extractor(sample, sampling_rate=SAMPLE_RATE)
+        inputs = feature_extractor(sample, sampling_rate=ami_processor.sample_rate)
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
         batch["input_length"] = len(batch["input_values"])
-        batch["input_id"] = batch[id_column_name] if data_args.log_first_ids else None
+        batch["input_id"] = batch[id_column_name] if id_column_name in batch else None
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
@@ -1019,7 +1032,7 @@ def main():
         for disfluency in swb_disfluencies:
             input_str = input_str.replace(disfluency, "")
         # remove parenthesised text (test data only)
-        input_str = re.sub("[\(].*?[\)]", "", input_str).replace("  ", " ")
+        input_str = re.sub("[\(].*?[\)]", "", input_str)
         for punctuation in swb_punctuations:
             input_str = input_str.replace(punctuation, "")
         # replace anomalous words with their correct transcriptions
@@ -1027,6 +1040,12 @@ def main():
         if len(split_str) > 1:
             input_str = " ".join(
                 [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+        # JIWER compliance
+        # remove multiple spaces
+        input_str = re.sub(r"\s\s+", " ", input_str)
+        # strip trailing spaces
+        input_str = input_str.strip()
 
         # Finally, we tokenize the processed text
         batch["labels"] = tokenizer(input_str).input_ids
@@ -1258,7 +1277,7 @@ def main():
 
         grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
 
-        if gradient_accumulation_steps == 1 or training_args.multisteps:
+        if gradient_accumulation_steps == 1:
             (loss, num_labels), grad = grad_fn(to_dtype(state.params), batch)
 
         # Custom gradient accumulation
@@ -1507,7 +1526,7 @@ def main():
 
                 if cur_step % training_args.eval_steps == 0:
                     # run beam search at each eval step
-                    run_evaluation(cur_step, final_step=True)
+                    run_evaluation(cur_step, final_step=False)
 
                 if cur_step % training_args.save_steps == 0:
                     save_checkpoint(cur_step)

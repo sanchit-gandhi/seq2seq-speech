@@ -964,7 +964,7 @@ def main():
         for disfluency in swb_disfluencies:
             input_str = input_str.replace(disfluency, "")
         # remove parenthesised text (test data only)
-        input_str = re.sub("[\(].*?[\)]", "", input_str).replace("  ", " ")
+        input_str = re.sub("[\(].*?[\)]", "", input_str)
         for punctuation in swb_punctuations:
             input_str = input_str.replace(punctuation, "")
         # replace anomalous words with their correct transcriptions
@@ -972,6 +972,12 @@ def main():
         if len(split_str) > 1:
             input_str = " ".join(
                 [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+        # JIWER compliance
+        # remove multiple spaces
+        input_str = re.sub(r"\s\s+", " ", input_str)
+        # strip trailing spaces
+        input_str = input_str.strip()
 
         # Finally, we tokenize the processed text
         batch["labels"] = tokenizer(input_str).input_ids
