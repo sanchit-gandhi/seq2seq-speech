@@ -5,11 +5,13 @@ python run_flax_speech_recognition_seq2seq.py \
         --dataset_config_name="clean" \
         --train_split_name="train.100" \
         --eval_split_name="validation" \
-        --test_split_name="validation+test" \
+        --test_split_name="test" \
         --text_column_name="text" \
         --id_column_name="id"
-        --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --output_dir="./" \
+        --wandb_project="librispeech_960h" \
+        --wandb_name="flax-wav2vec2-2-bart-large-ls-960h-baseline" \
+        --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="4" \
         --logging_steps="25" \
@@ -23,8 +25,6 @@ python run_flax_speech_recognition_seq2seq.py \
         --final_generation_num_beams="5" \
         --learning_rate="1e-4" \
         --warmup_steps="500" \
-        --wandb_project="librispeech_960h" \
-        --wandb_name="flax-wav2vec2-2-bart-large-ls-960h-baseline" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \
