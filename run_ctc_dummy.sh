@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 python ./run_flax_speech_recognition_ctc.py \
 	--model_name_or_path="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
+	--tokenizer_name="speech-seq2seq/flax-wav2vec2-large-lv60-scan"
 	--dataset_name="librispeech_asr" \
 	--dataset_config_name="clean" \
 	--train_split_name="train.100" \
@@ -10,7 +11,7 @@ python ./run_flax_speech_recognition_ctc.py \
 	--output_dir="./" \
 	--wandb_project="librispeech_asr" \
 	--wandb_name="flax-wav2vec2-ctc-ls-100h"
-	--dataset_cache_dir="/home/sanchitgandhi/cache" \
+  --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
 	--max_steps="50000" \
 	--save_steps="10000" \
 	--eval_steps="10000" \
