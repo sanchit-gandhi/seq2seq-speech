@@ -2,19 +2,25 @@
 python ./run_flax_speech_recognition_ctc.py \
 	--model_name_or_path="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
 	--dataset_name="librispeech_asr" \
-	--dataset_cache_dir="/mnt/disks/persist" \
-	--text_column="text" \
-	--dataset_config_name="all" \
-	--train_split_name="train.clean.100" \
-	--eval_split_name="validation.clean" \
-	--preprocessing_num_workers="1" \
-	--output_dir="train_clean_100" \
-	--num_train_epochs="3" \
+	--dataset_config_name="clean" \
+	--train_split_name="train.100" \
+	--eval_split_name="validation" \
+	--test_split_name="test" \
+	--text_column_name="text" \
+	--output_dir="./" \
+	--wandb_project="librispeech_asr" \
+	--wandb_name="flax-wav2vec2-ctc-ls-100h"
+	--dataset_cache_dir="/home/sanchitgandhi/cache" \
+	--max_steps="50000" \
+	--save_steps="10000" \
+	--eval_steps="10000" \
 	--learning_rate="3e-4" \
 	--logging_steps="25" \
-	--warmup_steps="250" \
-	--do_eval \
+	--warmup_steps="500" \
+	--preprocessing_num_workers="1" \
 	--do_train \
+	--do_eval \
+	--do_predict \
 	--overwrite_output_dir \
 	--gradient_checkpointing \
 	--freeze_feature_encoder \
