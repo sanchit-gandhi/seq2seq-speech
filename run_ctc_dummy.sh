@@ -24,3 +24,5 @@ python ./run_flax_speech_recognition_ctc.py \
 	--overwrite_output_dir \
 	--gradient_checkpointing \
 	--freeze_feature_encoder \
+	--push_to_hub \
+	--use_auth_token
