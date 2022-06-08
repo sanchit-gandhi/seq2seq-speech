@@ -7,7 +7,7 @@ python run_flax_speech_recognition_seq2seq.py \
         --eval_split_name="validation" \
         --test_split_name="test" \
         --text_column_name="text" \
-        --id_column_name="id"
+        --id_column_name="id" \
         --output_dir="./" \
         --wandb_project="librispeech_960h" \
         --wandb_name="flax-wav2vec2-2-bart-large-ls-960h-baseline" \
