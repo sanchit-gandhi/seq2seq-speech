@@ -861,13 +861,14 @@ def main():
     id_column_name = data_args.id_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
-    gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint": "!"}
+    gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
+    gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
                     "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
     earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", ""]
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -891,10 +892,7 @@ def main():
 
     def prepare_dataset(batch):
         # process audio
-        try:
-            sample = batch[audio_column_name]
-        except ValueError:
-            sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
+        sample = batch[audio_column_name]
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
@@ -925,9 +923,16 @@ def main():
         # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
         input_str = input_str.replace("<unk>", "").replace(" '", "'")
 
-        # GigaSpeech - convert spelled out punctuation to symbolic form
+        # GigaSpeech
+        for disfluency in gigaspeech_disfluencies:
+            input_str = input_str.replace(disfluency, "")
+        # convert spelled out punctuation to symbolic form
         for punctuation, replacement in gigaspeech_punctuation.items():
             input_str = input_str.replace(punctuation, replacement)
+        # if data_args.dataset_name == "speechcolab/gigaspeech" and len(input_str):
+            # for GS, we'll normalize the text to always finish with punctuation
+            # if input_str[-1] not in [".", "?", "!"]:
+                # input_str = input_str + "."
 
         # SWB
         for disfluency in swb_disfluencies:
