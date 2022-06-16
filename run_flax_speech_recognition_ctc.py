@@ -185,8 +185,8 @@ class DataTrainingArguments:
             "than this will be filtered."
         },
     )
-    min_target_length: Optional[int] = field(
-        default=0,
+    min_label_length: Optional[int] = field(
+        default=2,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
             "than this will be filtered."
@@ -876,6 +876,8 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
+    max_target_length = data_args.max_label_length
+    min_target_length = data_args.min_label_length
     pad_input_to_multiple_of = data_args.pad_input_to_multiple_of
     audio_column_name = data_args.audio_column_name
     num_workers = data_args.preprocessing_num_workers
@@ -1014,6 +1016,16 @@ def main():
         is_audio_in_length_range,
         num_proc=num_workers,
         input_columns=["input_length"],
+    )
+
+    # filter data with targets shorter than min_target_length or longer than max_target_length
+    def is_labels_in_length_range(length):
+        return length > min_target_length  # and length < max_target_length
+
+    vectorized_datasets = vectorized_datasets.filter(
+        is_labels_in_length_range,
+        num_proc=num_workers,
+        input_columns=["labels_length"],
     )
 
     # for large datasets it is advised to run the preprocessing on a
@@ -1354,7 +1366,10 @@ def main():
                 samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
                 batch = data_collator(samples)
                 batch = shard(batch.data)
-                state, train_metric = p_train_step(state, batch)
+                try:
+                    state, train_metric = p_train_step(state, batch)
+                except TypeError as e:
+                    logger.warning("Encountered following error: \n", e)
 
                 cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
