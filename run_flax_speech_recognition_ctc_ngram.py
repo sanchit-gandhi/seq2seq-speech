@@ -1406,12 +1406,12 @@ def main():
             eval_preds = []
             eval_labels = []
 
-            # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
-            eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
+            # Generate eval set by sequentially sampling indices from the test dataset and grouping by length
+            eval_samples_idx = get_grouped_indices(vectorized_datasets[split], eval_batch_size)
             eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
 
             for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc=f"Predicting {split}...", position=2)):
-                samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
+                samples = [vectorized_datasets[split][int(idx)] for idx in batch_idx]
                 batch = data_collator(samples)
                 batch = shard(batch.data)
                 labels = batch["labels"]
