@@ -898,14 +898,17 @@ def main():
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
+    dataset_name = data_args.dataset_name
     chars_to_ignore = ', ? . ! - ; : " “ % ‘ ” �'.split(" ")
     chars_to_ignore_regex = f'[{"".join(chars_to_ignore)}]'
-    gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint": "!"}
+    gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
+    gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
                     "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
+    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]"]
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -938,6 +941,7 @@ def main():
             is_target_labels,
             num_proc=num_workers,
             input_columns=[text_column_name],
+            desc="filtering data where the targets are ignored in scoring",
         )
 
     def prepare_dataset(batch):
@@ -963,18 +967,25 @@ def main():
         input_str = re.sub(r"[—–]", "-", input_str)
         # replace double quotation marks with single
         input_str = input_str.replace('""', '"')
-        if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
+        # if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+            # if input_str[-1] not in [".", "?", "!"]:
+                # input_str = input_str + "."
 
         # TEDLIUM-3
         # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
         input_str = input_str.replace("<unk>", "").replace(" '", "'")
 
-        # GigaSpeech - convert spelled out punctuation to symbolic form
+        # GigaSpeech
+        for disfluency in gigaspeech_disfluencies:
+            input_str = input_str.replace(disfluency, "")
+        # convert spelled out punctuation to symbolic form
         for punctuation, replacement in gigaspeech_punctuation.items():
             input_str = input_str.replace(punctuation, replacement)
+        # if dataset_name == "speechcolab/gigaspeech" and len(input_str):
+            # for GS, we'll normalize the text to always finish with punctuation
+            # if input_str[-1] not in [".", "?", "!"]:
+                # input_str = input_str + "."
 
         # SWB
         for disfluency in swb_disfluencies:
@@ -988,6 +999,12 @@ def main():
         if len(split_str) > 1:
             input_str = " ".join(
                 [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+        # Earnings 22
+        for disfluency in earnings_disfluencies:
+            input_str = input_str.replace(disfluency, "")
+        # replace mal-formatted ellipsis
+        input_str = input_str.replace("…", ".")
 
         # JIWER compliance
         # remove multiple spaces
@@ -1003,7 +1020,7 @@ def main():
     vectorized_datasets = raw_datasets.map(
         prepare_dataset,
         remove_columns=next(iter(raw_datasets.values())).column_names,
-        num_proc=data_args.preprocessing_num_workers,
+        num_proc=num_workers,
         desc="preprocess dataset",
     )
 

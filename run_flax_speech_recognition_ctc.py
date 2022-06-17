@@ -884,6 +884,7 @@ def main():
     text_column_name = data_args.text_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
+    dataset_name = data_args.dataset_name
     chars_to_ignore = ', ? . ! - ; : " “ % ‘ ” �'.split(" ")
     chars_to_ignore_regex = f'[{"".join(chars_to_ignore)}]'
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
@@ -926,6 +927,7 @@ def main():
             is_target_labels,
             num_proc=num_workers,
             input_columns=[text_column_name],
+            desc="filtering data where the targets are ignored in scoring",
         )
 
     def prepare_dataset(batch):
@@ -951,10 +953,10 @@ def main():
         input_str = re.sub(r"[—–]", "-", input_str)
         # replace double quotation marks with single
         input_str = input_str.replace('""', '"')
-        if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
+        # if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+            # if input_str[-1] not in [".", "?", "!"]:
+                # input_str = input_str + "."
 
         # TEDLIUM-3
         # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
@@ -966,7 +968,7 @@ def main():
         # convert spelled out punctuation to symbolic form
         for punctuation, replacement in gigaspeech_punctuation.items():
             input_str = input_str.replace(punctuation, replacement)
-        # if data_args.dataset_name == "speechcolab/gigaspeech" and len(input_str):
+        # if dataset_name == "speechcolab/gigaspeech" and len(input_str):
             # for GS, we'll normalize the text to always finish with punctuation
             # if input_str[-1] not in [".", "?", "!"]:
                 # input_str = input_str + "."
@@ -1004,7 +1006,7 @@ def main():
     vectorized_datasets = raw_datasets.map(
         prepare_dataset,
         remove_columns=next(iter(raw_datasets.values())).column_names,
-        num_proc=data_args.preprocessing_num_workers,
+        num_proc=num_workers,
         desc="preprocess dataset",
     )
 
