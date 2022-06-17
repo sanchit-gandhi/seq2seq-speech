@@ -647,6 +647,10 @@ def write_wandb_pred(pred_str, label_str, eval_ids, step, prefix="eval", top_ids
         )
         if final_step:
             str_data = np.array(str_data)
+            wandb.log(
+                {f"{prefix}/step_{int(step / 1000)}k_all": wandb.Table(columns=columns, data=str_data[:200000])},
+                step,
+            )
             str_data = str_data[str_data[:, 1] != str_data[:, 2]]
             wandb.log(
                 {f"{prefix}/step_{int(step / 1000)}k_incorrect": wandb.Table(columns=columns, data=str_data[:200000])},
@@ -861,6 +865,8 @@ def main():
     id_column_name = data_args.id_column_name
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
+    log_first_ids = data_args.log_first_ids
+    dataset_name = data_args.dataset_name
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
@@ -888,6 +894,7 @@ def main():
             is_target_labels,
             num_proc=num_workers,
             input_columns=[text_column_name],
+            desc="filtering data where the targets are ignored in scoring",
         )
 
     def prepare_dataset(batch):
@@ -897,7 +904,7 @@ def main():
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
         batch["input_length"] = len(batch["input_values"])
-        batch["input_id"] = batch[id_column_name] if data_args.log_first_ids else None
+        batch["input_id"] = batch[id_column_name] if log_first_ids else None
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
@@ -914,10 +921,10 @@ def main():
         input_str = re.sub(r"[—–]", "-", input_str)
         # replace double quotation marks with single
         input_str = input_str.replace('""', '"')
-        if data_args.dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
+        # if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+            # if input_str[-1] not in [".", "?", "!"]:
+                # input_str = input_str + "."
 
         # TEDLIUM-3
         # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
@@ -929,7 +936,7 @@ def main():
         # convert spelled out punctuation to symbolic form
         for punctuation, replacement in gigaspeech_punctuation.items():
             input_str = input_str.replace(punctuation, replacement)
-        # if data_args.dataset_name == "speechcolab/gigaspeech" and len(input_str):
+        # if dataset_name == "speechcolab/gigaspeech" and len(input_str):
             # for GS, we'll normalize the text to always finish with punctuation
             # if input_str[-1] not in [".", "?", "!"]:
                 # input_str = input_str + "."
@@ -967,7 +974,7 @@ def main():
     vectorized_datasets = raw_datasets.map(
         prepare_dataset,
         remove_columns=next(iter(raw_datasets.values())).column_names,
-        num_proc=data_args.preprocessing_num_workers,
+        num_proc=num_workers,
         desc="preprocess train dataset",
     )
 
