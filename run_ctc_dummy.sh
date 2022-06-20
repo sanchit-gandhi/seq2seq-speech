@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 python ./run_flax_speech_recognition_ctc.py \
 	--model_name_or_path="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
-	--tokenizer_name="speech-seq2seq/flax-wav2vec2-large-lv60-scan"
+	--tokenizer_name="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
 	--dataset_name="librispeech_asr" \
 	--dataset_config_name="clean" \
 	--train_split_name="train.100" \
