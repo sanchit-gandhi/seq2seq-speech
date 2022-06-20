@@ -10,8 +10,8 @@ python ./run_flax_speech_recognition_ctc.py \
 	--text_column_name="text" \
 	--output_dir="./" \
 	--wandb_project="librispeech_asr" \
-	--wandb_name="flax-wav2vec2-ctc-ls-100h"
-  --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
+	--wandb_name="flax-wav2vec2-ctc-ls-100h" \
+	--dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
 	--max_steps="50000" \
 	--save_steps="10000" \
 	--eval_steps="10000" \
