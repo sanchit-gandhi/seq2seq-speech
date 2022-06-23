@@ -107,10 +107,28 @@ class ModelArguments:
     freeze_feature_encoder: bool = field(
         default=True, metadata={"help": "Whether to freeze the feature encoder layers of the model."}
     )
+    activation_dropout: float = field(
+        default=0.1,
+        metadata={
+            "help": "The hidden activation dropout probability in the embeddings, encoder, and pooler."
+        },
+    )
     hidden_dropout: float = field(
         default=0.1,
         metadata={
             "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
+        },
+    )
+    feat_proj_dropout: float = field(
+        default=0.0,
+        metadata={
+            "help": "The feat proj dropout probability for feature encoder representations."
+        },
+    )
+    mask_time_prob: float = field(
+        default=0.1,
+        metadata={
+            "help": "The spec aug dropout probability for feature encoder representations."
         },
     )
     encoder_add_adapter: bool = field(
@@ -805,10 +823,19 @@ def main():
         {
             "gradient_checkpointing": training_args.gradient_checkpointing,
             "hidden_dropout": model_args.hidden_dropout,
+            "activation_dropout": model_args.activation_dropout,
+            "feat_proj_dropout": model_args.feat_proj_dropout,
+            "mask_time_prob": model_args.mask_time_prob,
             "add_adapter": model_args.encoder_add_adapter,
         }
     )
-    config.decoder.update({"gradient_checkpointing": training_args.gradient_checkpointing})
+    config.decoder.update(
+        {
+            "gradient_checkpointing": training_args.gradient_checkpointing,
+            "dropout": model_args.hidden_dropout,
+            "activation_dropout": model_args.activation_dropout,
+        }
+    )
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name if model_args.feature_extractor_name else model_args.model_name_or_path,
@@ -872,7 +899,7 @@ def main():
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
                     "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
-    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>"]
+    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
@@ -899,7 +926,10 @@ def main():
 
     def prepare_dataset(batch):
         # process audio
-        sample = batch[audio_column_name]
+        try:
+            sample = batch[audio_column_name]
+        except ValueError:
+            sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
         batch[model_input_name] = inputs.input_values[0]

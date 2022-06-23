@@ -892,7 +892,7 @@ def main():
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
                     "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
-    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>"]
+    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
@@ -932,7 +932,10 @@ def main():
 
     def prepare_dataset(batch):
         # process audio
-        sample = batch[audio_column_name]
+        try:
+            sample = batch[audio_column_name]
+        except ValueError:
+            sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
