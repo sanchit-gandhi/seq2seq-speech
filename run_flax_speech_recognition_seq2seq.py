@@ -568,6 +568,7 @@ def get_grouped_indices(
     # We need to use JAX for the random permutation as the PRNG key will be set based on the seed outside of the sampler.
     num_samples = len(lengths)
     indices = jax.random.permutation(rng, np.arange(num_samples)) if rng is not None else np.arange(num_samples)
+    indices = np.asarray(indices)
 
     megabatch_size = mega_batch_mult * batch_size
     megabatches = [indices[i : i + megabatch_size].tolist() for i in range(0, len(lengths), megabatch_size)]
