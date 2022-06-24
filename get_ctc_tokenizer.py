@@ -9,17 +9,17 @@ from transformers import Wav2Vec2CTCTokenizer
 from run_flax_speech_recognition_ami_ctc import chunk_audio, chunk_into_max_n_seconds
 
 # which dataset
-dataset_name = "ami"
+dataset_name = "kensho/spgispeech"
 # which config
-dataset_config = "headset-single"
+dataset_config = "S"
 # which split => @Sanchit, we should only use the train split for "fairness"
 split = "train"
 # in case the dataset requires access like CV9
 use_auth_token = True
 # name of the text data column
-text_column = "text"
+text_column = "transcript"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_ami_tokenizer"
+tokenizer_name = "wav2vec2_ctc_spgispeech_tokenizer"
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # For GigaSpeech, we need to convert spelled out punctuation to symbolic form

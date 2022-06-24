@@ -189,7 +189,7 @@ class DataTrainingArguments:
             "than this will be filtered."
         },
     )
-    min_target_length: Optional[int] = field(
+    min_label_length: Optional[int] = field(
         default=2,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
@@ -906,7 +906,7 @@ def main():
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
                     "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
-    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>"]
+    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
