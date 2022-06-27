@@ -587,12 +587,20 @@ def get_grouped_indices(
     return megabatches
 
 
-def generate_batch_splits(samples_idx: np.ndarray, batch_size: int) -> np.ndarray:
+def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last_batch=True) -> np.ndarray:
     """Generate batches of data for a specified batch size from sample indices. If the dataset size is not divisible by
-    the batch size, the last incomplete batch is returned."""
+    the batch size, the last incomplete batch is dropped."""
     num_samples = len(samples_idx)
-    sections_split = math.ceil(num_samples / batch_size)
-    return np.array_split(samples_idx, sections_split)
+    if drop_last_batch:
+        samples_to_remove = num_samples % batch_size
+
+        if samples_to_remove != 0:
+            samples_idx = samples_idx[:-samples_to_remove]
+        sections_split = num_samples // batch_size
+        return samples_idx.reshape((sections_split, batch_size))
+    else:
+        sections_split = math.ceil(num_samples / batch_size)
+        return np.array_split(samples_idx, sections_split)
 
 
 def data_loader(dataset, batch_size, rng, sampler, collator):
@@ -1343,7 +1351,7 @@ def main():
 
             # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
             eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
-            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size, drop_last_batch=False)
 
             for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
                 samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
@@ -1351,7 +1359,7 @@ def main():
                 eval_ids.extend(batch.pop("input_ids"))
                 labels = batch["labels"]
 
-                metrics = pad_shard_unpad(p_eval_step)(state.params, batch.data)
+                metrics = pad_shard_unpad(p_eval_step, static_return=True)(state.params, batch.data)
                 eval_metrics.append(metrics)
 
                 # generation
@@ -1441,14 +1449,15 @@ def main():
 
             # Generate an epoch by randomly shuffling sampling indices from the train dataset and grouping by length
             train_samples_idx = get_grouped_indices(vectorized_datasets["train"], batch_size_per_update, input_rng)
-            train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update)
+            train_batch_idx = generate_batch_splits(train_samples_idx, batch_size_per_update, drop_last_batch=True)
 
             # Gather the indices for creating the batch and do a training step
             for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1), 1):
                 samples = [vectorized_datasets["train"][int(idx)] for idx in batch_idx]
                 batch = data_collator(samples)
                 batch.pop("input_ids")
-                state, train_metric = pad_shard_unpad(p_train_step)(state, batch.data)
+                batch = shard(batch.data)
+                state, train_metric = p_train_step(state, batch)
 
                 cur_step = epoch * (num_train_samples // batch_size_per_update) + step
 
@@ -1500,7 +1509,7 @@ def main():
 
             # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
             pred_samples_idx = get_grouped_indices(vectorized_datasets[split], eval_batch_size)
-            pred_batch_idx = generate_batch_splits(pred_samples_idx, eval_batch_size)
+            pred_batch_idx = generate_batch_splits(pred_samples_idx, eval_batch_size, drop_last_batch=False)
 
             for i, batch_idx in enumerate(tqdm(pred_batch_idx, desc=f"Predicting {split}...", position=2)):
                 samples = [vectorized_datasets[split][int(idx)] for idx in batch_idx]
@@ -1508,7 +1517,7 @@ def main():
                 pred_ids.extend(batch.pop("input_ids"))
                 labels = batch["labels"]
 
-                metrics = pad_shard_unpad(p_eval_step)(state.params, batch.data)
+                metrics = pad_shard_unpad(p_eval_step, static_return=True)(state.params, batch.data)
                 pred_metrics.append(metrics)
 
                 # generation
