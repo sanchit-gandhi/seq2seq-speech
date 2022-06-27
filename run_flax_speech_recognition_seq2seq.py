@@ -587,39 +587,20 @@ def get_grouped_indices(
     return megabatches
 
 
-def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last_batch=True) -> np.ndarray:
+def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last=True) -> np.ndarray:
     """Generate batches of data for a specified batch size from sample indices. If the dataset size is not divisible by
-    the batch size, the last incomplete batch is dropped."""
+    the batch size and `drop_last` is `True`, the last incomplete batch is dropped. Else, it is returned."""
     num_samples = len(samples_idx)
-    if drop_last_batch:
+    if drop_last:
         samples_to_remove = num_samples % batch_size
-
         if samples_to_remove != 0:
             samples_idx = samples_idx[:-samples_to_remove]
         sections_split = num_samples // batch_size
-        return samples_idx.reshape((sections_split, batch_size))
+        samples_idx = samples_idx.reshape((sections_split, batch_size))
     else:
         sections_split = math.ceil(num_samples / batch_size)
-        return np.array_split(samples_idx, sections_split)
-
-
-def data_loader(dataset, batch_size, rng, sampler, collator):
-    samples_idx = sampler(dataset, batch_size, rng)
-
-    num_samples = len(samples_idx)
-    samples_to_remove = num_samples % batch_size
-
-    if samples_to_remove != 0:
-        samples_idx = samples_idx[:-samples_to_remove]
-    sections_split = num_samples // batch_size
-
-    batch_idx = np.split(samples_idx, sections_split)
-
-    for idx in batch_idx:
-        samples = dataset[idx]
-        batch = collator(samples)
-        batch = shard(batch.data)
-        yield batch
+        samples_idx = np.array_split(samples_idx, sections_split)
+    return samples_idx
 
 
 def write_train_metric(summary_writer, train_metrics, train_time, step):
@@ -1130,6 +1111,7 @@ def main():
     gradient_accumulation_steps = int(training_args.gradient_accumulation_steps)
     train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count()
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
+    per_device_eval_batch_size = int(training_args.per_device_eval_batch_size)
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
     to_dtype = to_bf16 if training_args.mixed_precision else to_fp32
 
@@ -1359,7 +1341,7 @@ def main():
                 eval_ids.extend(batch.pop("input_ids"))
                 labels = batch["labels"]
 
-                metrics = pad_shard_unpad(p_eval_step, static_return=True)(state.params, batch.data)
+                metrics = pad_shard_unpad(p_eval_step, static_return=True)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
                 eval_metrics.append(metrics)
 
                 # generation
@@ -1522,7 +1504,7 @@ def main():
 
                 # generation
                 if training_args.predict_with_generate:
-                    generated_ids = pad_shard_unpad(p_final_generate_step)(state.params, batch.data)
+                    generated_ids = pad_shard_unpad(p_final_generate_step)(state.params, batch.data, min_device_batch_size=per_device_eval_batch_size)
                     pred_generations.extend(
                         jax.device_get(
                             generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
