@@ -3,21 +3,21 @@
   <component name="WebServers">
     <option name="servers">
       <webServer id="58bbff6e-f818-4017-919d-2c2db4b2c28e" name="tpu-1">
-        <fileTransfer accessType="SFTP" host="34.90.198.246" port="22" sshConfigId="bb8d8741-1c86-480a-81d0-ad83dc02ca1d" sshConfig="tpu-1" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.147.37.225" port="22" sshConfigId="bb8d8741-1c86-480a-81d0-ad83dc02ca1d" sshConfig="tpu-1" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
         </fileTransfer>
       </webServer>
       <webServer id="ab1833d5-ad73-4828-bc7e-adf86aba5741" name="special">
-        <fileTransfer accessType="SFTP" host="35.202.33.217" port="22" sshConfigId="2d9e2694-95b8-4487-9f5d-72b791b7cc17" sshConfig="special" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.67.120.159" port="22" sshConfigId="2d9e2694-95b8-4487-9f5d-72b791b7cc17" sshConfig="special" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
         </fileTransfer>
       </webServer>
       <webServer id="4c1bb5b3-c99f-4983-a80b-74311d9a2bdc" name="tpu-2">
-        <fileTransfer accessType="SFTP" host="35.204.254.0" port="22" sshConfigId="fa3f5619-fe78-4da6-ac8c-11e0aca4fe7d" sshConfig="tpu-2" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.90.198.246" port="22" sshConfigId="fa3f5619-fe78-4da6-ac8c-11e0aca4fe7d" sshConfig="tpu-2" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -31,7 +31,7 @@
         </fileTransfer>
       </webServer>
       <webServer id="d5116bfa-23b0-4c36-8240-998a44a9f71c" name="tpu-4">
-        <fileTransfer accessType="SFTP" host="34.91.100.66" port="22" sshConfigId="295d9af4-b416-44aa-8639-626604c3e0d6" sshConfig="tpu-4" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.147.1.47" port="22" sshConfigId="295d9af4-b416-44aa-8639-626604c3e0d6" sshConfig="tpu-4" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -45,14 +45,14 @@
         </fileTransfer>
       </webServer>
       <webServer id="3e8cebd4-2667-4fc8-8df3-2e70467b2e2b" name="tpu-5">
-        <fileTransfer accessType="SFTP" host="34.91.246.205" port="22" sshConfigId="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" sshConfig="tpu-5" keyPair="true">
+        <fileTransfer accessType="SFTP" host="35.204.254.0" port="22" sshConfigId="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" sshConfig="tpu-5" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
         </fileTransfer>
       </webServer>
       <webServer id="dea70a95-38e3-41f4-b865-4b9fc6c55697" name="patrick-tpu">
-        <fileTransfer accessType="SFTP" host="35.204.7.21" port="22" sshConfigId="4b5e0687-8532-48b2-ab54-47cf488b8282" sshConfig="patrick-tpu" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.147.37.53" port="22" sshConfigId="4b5e0687-8532-48b2-ab54-47cf488b8282" sshConfig="patrick-tpu" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -70,6 +70,7 @@
           <name value="tpu-4" />
           <name value="transformers-testing" />
           <name value="tpu-5" />
+          <name value="patrick-tpu" />
         </servers>
       </group>
     </groups>
