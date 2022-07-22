@@ -42,7 +42,7 @@ from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from huggingface_hub import Repository
-from models.modeling_flax_speech_encoder_decoder import FlaxSpeechEncoderDecoderModel
+from models import FlaxSpeechEncoderDecoderModel
 from optax._src import linear_algebra
 from transformers import (
     AutoConfig,

@@ -31,11 +31,15 @@ from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLM
 from transformers.modeling_flax_utils import FlaxPreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings, ModelOutput
 from transformers.generation_flax_utils import FlaxLogitsProcessorList
-from models.modeling_flax_wav2vec2 import FlaxWav2Vec2Model, FlaxWav2Vec2Module
-from models.modeling_flax_bart import FlaxBartForCausalLM, FlaxBartForCausalLMModule
-from models.configuration_bart import BartConfig
-from models.configuration_wav2vec2 import Wav2Vec2Config
-from models.configuration_speech_encoder_decoder import SpeechEncoderDecoderConfig
+from models import (
+    FlaxWav2Vec2Model,
+    FlaxWav2Vec2Module,
+    FlaxBartForCausalLM,
+    FlaxBartForCausalLMModule,
+    BartConfig,
+    Wav2Vec2Config,
+    SpeechEncoderDecoderConfig,
+)
 
 logger = logging.get_logger(__name__)
 

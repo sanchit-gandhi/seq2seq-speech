@@ -42,8 +42,7 @@ from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import unreplicate
 from flax.training.common_utils import get_metrics, shard, shard_prng_key
 from huggingface_hub import Repository
-from models.configuration_wav2vec2 import Wav2Vec2Config
-from models.modeling_flax_wav2vec2 import FlaxWav2Vec2ForCTC
+from models import Wav2Vec2Config, FlaxWav2Vec2ForCTC
 from optax._src import linear_algebra
 from pyctcdecode import BeamSearchDecoderCTC
 from transformers import (
