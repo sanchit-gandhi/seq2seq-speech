@@ -37,7 +37,7 @@ from transformers.modeling_flax_outputs import (
 )
 from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel
 
-from models.configuration_bart import BartConfig
+from models import BartConfig
 
 
 scan_with_axes = nn_partitioning.scan_with_axes

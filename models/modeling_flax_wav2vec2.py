@@ -30,7 +30,7 @@ from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLM
 from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel
 from transformers.utils import ModelOutput
 
-from models.configuration_wav2vec2 import Wav2Vec2Config
+from models import Wav2Vec2Config
 
 scan_with_axes = nn_partitioning.scan_with_axes
 remat = nn_partitioning.remat
