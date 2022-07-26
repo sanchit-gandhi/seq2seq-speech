@@ -19,33 +19,38 @@ Fine-tuning the Flax library models for sequence to sequence speech recognition.
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 
 import logging
+import math
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from torch import nn
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import json
-from typing import Optional
+from typing import Optional, Dict, Union, Any, Tuple, List
 
 import numpy as np
 import torch
 
 from omegaconf import OmegaConf
-from nemo.collections.asr.models import EncDecRNNTBPEModel
+from models.rnnt_bpe_model import RNNTBPEModel
 
 import datasets
-from datasets import DatasetDict, load_dataset
+from datasets import DatasetDict, load_dataset, Dataset
 import transformers
 from transformers import (
     HfArgumentParser,
     Seq2SeqTrainingArguments,
     is_tensorboard_available,
-    set_seed, Trainer,
+    set_seed,
+    Trainer,
 )
-from transformers.trainer_pt_utils import get_parameter_names
-from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.trainer_pt_utils import get_parameter_names, nested_detach
+from transformers.trainer_utils import get_last_checkpoint, is_main_process, speed_metrics
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -53,9 +58,6 @@ from process_asr_text_tokenizer import __process_data as nemo_process_data, \
     __build_document_from_manifests as nemo_build_document_from_manifests
 
 import bitsandbytes as bnb
-
-from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import WandbLogger
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
@@ -261,7 +263,7 @@ class DataTrainingArguments:
 
 def build_tokenizer(model_args, data_args, manifests):
     data_root = model_args.tokenizer_path
-    joint_manifests = manifests[0]
+    joint_manifests = ",".join(manifests)
     vocab_size = model_args.vocab_size
     tokenizer = model_args.tokenizer_type
     spe_type = model_args.spe_type
@@ -353,7 +355,7 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    config = OmegaConf.load(model_args.model_name_or_path)
+    config = OmegaConf.load(model_args.model_name_or_path).model
 
     # 4. Load dataset
     raw_datasets = DatasetDict()
@@ -420,13 +422,13 @@ def main():
 
     # 6. Resample speech dataset ALWAYS
     raw_datasets = raw_datasets.cast_column(
-        data_args.audio_column_name, datasets.features.Audio(sampling_rate=config.model.sample_rate)
+        data_args.audio_column_name, datasets.features.Audio(sampling_rate=config.sample_rate)
     )
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
-    max_input_length = int(data_args.max_duration_in_seconds * config.model.sample_rate)
-    min_input_length = int(data_args.min_duration_in_seconds * config.model.sample_rate)
+    max_input_length = int(data_args.max_duration_in_seconds * config.sample_rate)
+    min_input_length = int(data_args.min_duration_in_seconds * config.sample_rate)
     max_target_length = data_args.max_target_length
     min_target_length = data_args.min_target_length
     audio_column_name = data_args.audio_column_name
@@ -471,7 +473,7 @@ def main():
         try:
             sample = batch[audio_column_name]
         except ValueError:
-            sample = {"array": np.array([0.]), "sampling_rate": config.model.sampling_rate}
+            sample = {"array": np.array([0.]), "sampling_rate": config.sampling_rate}
 
         batch["input_length"] = len(sample["array"]) / sample["sampling_rate"]
 
@@ -601,60 +603,166 @@ def main():
         TRAIN_MANIFEST = os.path.join(model_args.manifest_path, "train.json")
         build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
         manifests.append(TRAIN_MANIFEST)
-        config.model.train_ds.manifest_filepath = TRAIN_MANIFEST
-        config.model.train_ds.batch_size = training_args.per_device_train_batch_size
+        config.train_ds.manifest_filepath = TRAIN_MANIFEST
+        config.train_ds.batch_size = training_args.per_device_train_batch_size
+    else:
+        config.train_ds = None
 
     if training_args.do_eval:
         VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
-        build_manifest(vectorized_datasets, "train", VAL_MANIFEST)
+        build_manifest(vectorized_datasets, "eval", VAL_MANIFEST)
         manifests.append(VAL_MANIFEST)
-        config.model.validation_ds.manifest_filepath = VAL_MANIFEST
-        config.model.validation_ds.batch_size = training_args.per_device_eval_batch_size
+        config.validation_ds.manifest_filepath = VAL_MANIFEST
+        config.validation_ds.batch_size = training_args.per_device_eval_batch_size
+    else:
+        config.validation_ds = None
 
     if training_args.do_predict:
         TEST_MANIFEST_PATH = []
         for split in test_split:
             test_manifest_path = os.path.join(model_args.manifest_path, f"{split}.json")
-            build_manifest(vectorized_datasets, "train", test_manifest_path)
+            build_manifest(vectorized_datasets, split, test_manifest_path)
             manifests.append(test_manifest_path)
             TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
         # TODO: handle multiple test sets
-        config.model.test_ds.manifest_filepath = ",".join(TEST_MANIFEST_PATH)
-        config.model.test_ds.batch_size = training_args.per_device_eval_batch_size
+        config.test_ds.manifest_filepath = ",".join(TEST_MANIFEST_PATH)
+        config.test_ds.batch_size = training_args.per_device_eval_batch_size
 
     tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests)
 
-    config.model.tokenizer.dir = tokenizer_dir
-    config.model.tokenizer.type = tokenizer_type_cfg
+    config.tokenizer.dir = tokenizer_dir
+    config.tokenizer.type = tokenizer_type_cfg
 
-    config.exp_manager.create_wandb_logger = True
-    if data_args.wandb_name:
-        config.exp_manager.wandb_logger_kwargs.name = data_args.wandb_name
-    config.exp_manager.wandb_logger_kwargs.project = data_args.wandb_project
+    model = RNNTBPEModel(cfg=config)
 
-    config.model.optim.lr = training_args.learning_rate
-    # config.model.optim.sched.warmup_steps = training_args.warmup_steps
+    # bnb optimizer
+    decay_parameters = get_parameter_names(model, [torch.nn.LayerNorm])
+    decay_parameters = [name for name in decay_parameters if "bias" not in name]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if n in decay_parameters],
+            "weight_decay": training_args.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer = bnb.optim.Adam8bit(
+        params=optimizer_grouped_parameters,
+        lr=training_args.learning_rate,
+        betas=(training_args.adam_beta1, training_args.adam_beta2),
+        eps=training_args.adam_epsilon,
+    )
+    optimizers = (optimizer, None)
 
-    if torch.cuda.is_available():
-        accelerator = 'gpu'
+    def list_to_dict(batch, compute_wer=False):
+        keys = ["inputs", "input_lengths", "labels", "label_lengths"]
+        assert len(batch) == len(keys), "key-batch mismatch"
+        batch = {keys[i]: batch[i] for i in range(len(batch))}
+        if compute_wer:
+            batch["compute_wer"] = True
+        else:
+            batch["compute_wer"] = False
+        return batch
+
+    def compute_metrics(pred):
+        wer_num = pred.predictions[1]
+        wer_denom = pred.predictions[2]
+        wer = sum(wer_num) / sum(wer_denom)
+        return {"wer": wer}
+
+    class RNNTTrainer(Trainer):
+        def get_train_dataloader(self) -> DataLoader:
+            train_dl = iter(self.model.train_dataloader())
+            for batch in train_dl:
+                yield list_to_dict(batch, compute_wer=False)
+
+        def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+            val_dl = iter(self.model.val_dataloader())
+            for batch in val_dl:
+                yield list_to_dict(batch, compute_wer=True)
+
+        def get_test_dataloader(self, test_dataset: Dataset) -> DataLoader:
+            test_dl = iter(self.model.test_dataloader())
+            for batch in test_dl:
+                yield list_to_dict(batch, compute_wer=True)
+
+    # from aim.hugging_face import AimCallback
+
+    # aim_callback = AimCallback(repo='aim://127.0.0.1:8888', experiment=data_args.wandb_project)
+
+    # Initialize Trainer
+    trainer = RNNTTrainer(
+        model=model,
+        args=training_args,
+        optimizers=optimizers,
+        compute_metrics=compute_metrics,
+        # callbacks=[aim_callback],
+    )
+
+    # 8. Finally, we can start training
+
+    # Training
+    if training_args.do_train:
+
+        # use last checkpoint if exist
+        if last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        elif os.path.isdir(model_args.model_name_or_path):
+            checkpoint = model_args.model_name_or_path
+        else:
+            checkpoint = None
+
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        trainer.save_model()
+
+        metrics = train_result.metrics
+        max_train_samples = (
+            data_args.max_train_samples
+            if data_args.max_train_samples is not None
+            else len(vectorized_datasets["train"])
+        )
+        metrics["train_samples"] = min(max_train_samples, len(vectorized_datasets["train"]))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    # Evaluation
+    results = {}
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+        metrics = trainer.evaluate()
+        max_eval_samples = (
+            data_args.max_eval_samples if data_args.max_eval_samples is not None else len(vectorized_datasets["eval"])
+        )
+        metrics["eval_samples"] = min(max_eval_samples, len(vectorized_datasets["eval"]))
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+
+    # Write model card and (optionally) push to hub
+    config_name = data_args.dataset_config_name if data_args.dataset_config_name is not None else "na"
+    kwargs = {
+        "finetuned_from": model_args.model_name_or_path,
+        "tasks": "speech-recognition",
+        "tags": ["automatic-speech-recognition", data_args.dataset_name],
+        "dataset_args": (
+            f"Config: {config_name}, Training split: {data_args.train_split_name}, Eval split:"
+            f" {data_args.eval_split_name}"
+        ),
+        "dataset": f"{data_args.dataset_name.upper()} - {config_name.upper()}",
+    }
+    if "common_voice" in data_args.dataset_name:
+        kwargs["language"] = config_name
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(**kwargs)
     else:
-        accelerator = 'gpu'
+        trainer.create_model_card(**kwargs)
 
-    EPOCHS = 50
-
-    wandb_logger = WandbLogger(name=data_args.wandb_name, project=data_args.wandb_project)
-
-    # Initialize a Trainer for the Transducer model
-    trainer = Trainer(devices=1, accelerator=accelerator, max_epochs=EPOCHS,
-                      enable_checkpointing=False,
-                      log_every_n_steps=training_args.logging_steps, check_val_every_n_epoch=10, logger=wandb_logger)
-
-    model = EncDecRNNTBPEModel(cfg=config.model, trainer=trainer)
-
-    # Train the model
-    trainer.fit(model)
-
-    trainer.test(model)
+    return results
 
 
 if __name__ == "__main__":

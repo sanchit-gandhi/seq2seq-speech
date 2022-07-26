@@ -20,4 +20,4 @@ python run_speech_recognition_rnnt.py \
         --overwrite_output_dir \
         --do_lower_case \
         --do_eval \
-        --do_train
+        --push_to_hub="False"

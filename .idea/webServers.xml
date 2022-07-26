@@ -10,7 +10,7 @@
         </fileTransfer>
       </webServer>
       <webServer id="ab1833d5-ad73-4828-bc7e-adf86aba5741" name="special">
-        <fileTransfer accessType="SFTP" host="35.202.33.217" port="22" sshConfigId="2d9e2694-95b8-4487-9f5d-72b791b7cc17" sshConfig="special" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.67.120.159" port="22" sshConfigId="2d9e2694-95b8-4487-9f5d-72b791b7cc17" sshConfig="special" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -53,6 +53,13 @@
       </webServer>
       <webServer id="dea70a95-38e3-41f4-b865-4b9fc6c55697" name="patrick-tpu">
         <fileTransfer accessType="SFTP" host="35.204.7.21" port="22" sshConfigId="4b5e0687-8532-48b2-ab54-47cf488b8282" sshConfig="patrick-tpu" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="e27a51d3-43c4-4cbf-a2b9-74b5881bf5d4" name="single-v100">
+        <fileTransfer accessType="SFTP" host="35.232.217.68" port="22" sshConfigId="70b6b7da-51d3-4bc7-bfe9-1f0b24b5cb35" sshConfig="sanchit_huggingface_co@35.232.217.68:22 key" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>

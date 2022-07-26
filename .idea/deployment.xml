@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="single-v100" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="patrick-tpu">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="single-v100">
         <serverdata>
           <mappings>
             <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
