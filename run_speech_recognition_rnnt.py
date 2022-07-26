@@ -602,12 +602,14 @@ def main():
         build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
         manifests.append(TRAIN_MANIFEST)
         config.model.train_ds.manifest_filepath = TRAIN_MANIFEST
+        config.model.train_ds.batch_size = training_args.per_device_train_batch_size
 
     if training_args.do_eval:
         VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
         build_manifest(vectorized_datasets, "train", VAL_MANIFEST)
         manifests.append(VAL_MANIFEST)
         config.model.validation_ds.manifest_filepath = VAL_MANIFEST
+        config.model.validation_ds.batch_size = training_args.per_device_eval_batch_size
 
     if training_args.do_predict:
         TEST_MANIFEST_PATH = []
@@ -618,15 +620,12 @@ def main():
             TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
         # TODO: handle multiple test sets
         config.model.test_ds.manifest_filepath = ",".join(TEST_MANIFEST_PATH)
+        config.model.test_ds.batch_size = training_args.per_device_eval_batch_size
 
     tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests)
 
     config.model.tokenizer.dir = tokenizer_dir
     config.model.tokenizer.type = tokenizer_type_cfg
-
-    config.model.train_ds.batch_size = training_args.per_device_train_batch_size
-    config.model.validation_ds.batch_size = training_args.per_device_eval_batch_size
-    config.model.validation_ds.batch_size = training_args.per_device_eval_batch_size
 
     config.exp_manager.create_wandb_logger = True
     if data_args.wandb_name:
