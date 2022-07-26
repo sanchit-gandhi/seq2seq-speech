@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 python run_speech_recognition_rnnt.py \
         --model_name_or_path="config_rnnt_bpe.yaml" \
-        --dataset_name="hf-internal-testing/librispeech_asr_dummy" \
+        --dataset_name="librispeech_asr" \
         --tokenizer_path="tokenizer" \
-        --vocab_size="32" \
+        --vocab_size="1024" \
+        --num_train_epochs="3" \
         --dataset_config_name="clean" \
-        --train_split_name="validation" \
+        --train_split_name="train" \
         --eval_split_name="validation" \
         --test_split_name="validation" \
         --text_column_name="text" \
@@ -13,11 +14,12 @@ python run_speech_recognition_rnnt.py \
         --output_dir="./" \
         --wandb_project="rnnt_debug" \
         --per_device_train_batch_size="16" \
-        --per_device_eval_batch_size="2" \
+        --per_device_eval_batch_size="8" \
         --logging_steps="25" \
         --learning_rate="1e-4" \
         --warmup_steps="500" \
         --overwrite_output_dir \
         --do_lower_case \
         --do_eval \
+        --do_train \
         --push_to_hub="False"
