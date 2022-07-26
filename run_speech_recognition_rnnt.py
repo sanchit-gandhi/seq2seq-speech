@@ -24,27 +24,38 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
 from tqdm import tqdm
 import json
 from typing import Optional
 
-import datasets
 import numpy as np
-from datasets import DatasetDict, load_dataset
+import torch
 
-import jax
+from omegaconf import OmegaConf
+from nemo.collections.asr.models import EncDecRNNTBPEModel
+
+import datasets
+from datasets import DatasetDict, load_dataset
 import transformers
 from transformers import (
     HfArgumentParser,
     Seq2SeqTrainingArguments,
     is_tensorboard_available,
-    set_seed,
+    set_seed, Trainer,
 )
-
+from transformers.trainer_pt_utils import get_parameter_names
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from process_asr_text_tokenizer import __process_data as nemo_process_data, \
+    __build_document_from_manifests as nemo_build_document_from_manifests
+
+import bitsandbytes as bnb
+
+from pytorch_lightning import Trainer
+from pytorch_lightning.loggers import WandbLogger
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
@@ -88,7 +99,37 @@ class ModelArguments:
         default=False,
         metadata={
             "help": "Will use the token generated when running `transformers-cli login` (necessary to use this script "
-            "with private models)."
+                    "with private models)."
+        },
+    )
+    manifest_path: str = field(
+        default="data",
+        metadata={
+            "help": "Manifest path."
+        },
+    )
+    tokenizer_path: str = field(
+        default="tokenizers",
+        metadata={
+            "help": "Tokenizer path."
+        },
+    )
+    vocab_size: int = field(
+        default=1024,
+        metadata={"help": "Tokenizer vocab size."}
+    )
+    tokenizer_type: str = field(
+        default="spe",
+        metadata={
+            "help": "Can be either spe or wpe. spe refers to the Google sentencepiece library tokenizer."
+                    "wpe refers to the HuggingFace BERT Word Piece tokenizer."
+        },
+    )
+    spe_type: str = field(
+        default="unigram",
+        metadata={
+            "help": "Type of the SentencePiece model. Can be `bpe`, `unigram`, `char` or `word`."
+                    "Used only if `tokenizer_type` == `spe`"
         },
     )
 
@@ -123,21 +164,21 @@ class DataTrainingArguments:
         default=None,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of training examples to this "
-            "value if set."
+                    "value if set."
         },
     )
     max_eval_samples: Optional[int] = field(
         default=None,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
-            "value if set."
+                    "value if set."
         },
     )
     max_test_samples: Optional[int] = field(
         default=None,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of test examples to this "
-            "value if set."
+                    "value if set."
         },
     )
     audio_column_name: str = field(
@@ -148,9 +189,9 @@ class DataTrainingArguments:
         default="text",
         metadata={"help": "The name of the dataset column containing the text data. Defaults to 'text'"},
     )
-    id_column_name: str = field(
-        default="id",
-        metadata={"help": "The name of the dataset column containing the id data. Defaults to 'id'"},
+    file_column_name: str = field(
+        default="file",
+        metadata={"help": "The name of the dataset column containing the audio file path. Defaults to 'file'"},
     )
     max_duration_in_seconds: float = field(
         default=20.0,
@@ -165,23 +206,23 @@ class DataTrainingArguments:
         default=128,
         metadata={
             "help": "The maximum total sequence length for target text after tokenization. Sequences longer "
-            "than this will be truncated, sequences shorter will be padded."
+                    "than this will be truncated, sequences shorter will be padded."
         },
     )
     min_target_length: Optional[int] = field(
         default=2,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
-            "than this will be filtered."
+                    "than this will be filtered."
         },
     )
     preprocessing_only: bool = field(
         default=False,
         metadata={
             "help": "Whether to only do data preprocessing and skip training. "
-            "This is especially useful when data preprocessing errors out in distributed training due to timeout. "
-            "In this case, one should run the preprocessing in a non-distributed setup with `preprocessing_only=True` "
-            "so that the cached datasets can consequently be loaded in distributed training"
+                    "This is especially useful when data preprocessing errors out in distributed training due to timeout. "
+                    "In this case, one should run the preprocessing in a non-distributed setup with `preprocessing_only=True` "
+                    "so that the cached datasets can consequently be loaded in distributed training"
         },
     )
     train_split_name: str = field(
@@ -216,12 +257,51 @@ class DataTrainingArguments:
         default="RNN-T",
         metadata={"help": "The name of the wandb job type."},
     )
-    manifest_path: str = field(
-        default="data",
-        metadata={
-            "help": "Manifest path."
-        },
+
+
+def build_tokenizer(model_args, data_args, manifests):
+    data_root = model_args.tokenizer_path
+    joint_manifests = manifests[0]
+    vocab_size = model_args.vocab_size
+    tokenizer = model_args.tokenizer_type
+    spe_type = model_args.spe_type
+
+    if not os.path.exists(data_root):
+        os.makedirs(data_root)
+    else:
+        os.system(f"rm -rf {data_root}")
+        os.makedirs(data_root)
+
+    text_corpus_path = nemo_build_document_from_manifests(data_root, joint_manifests)
+
+    tokenizer_path = nemo_process_data(
+        text_corpus_path,
+        data_root,
+        vocab_size,
+        tokenizer,
+        spe_type,
+        lower_case=data_args.do_lower_case,
+        spe_character_coverage=1.0,
+        spe_sample_size=-1,
+        spe_train_extremely_large_corpus=False,
+        spe_max_sentencepiece_length=-1,
+        spe_bos=False,
+        spe_eos=False,
+        spe_pad=False,
     )
+
+    print("Serialized tokenizer at location :", tokenizer_path)
+    logger.info('Done!')
+
+    # Tokenizer path
+    if tokenizer == 'spe':
+        tokenizer_dir = os.path.join(data_root, f"tokenizer_spe_{spe_type}_v{vocab_size}")
+        tokenizer_type_cfg = "bpe"
+    else:
+        tokenizer_dir = os.path.join(data_root, f"tokenizer_wpe_v{vocab_size}")
+        tokenizer_type_cfg = "wpe"
+
+    return tokenizer_dir, tokenizer_type_cfg
 
 
 def main():
@@ -272,6 +352,8 @@ def main():
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
+
+    config = OmegaConf.load(model_args.model_name_or_path)
 
     # 4. Load dataset
     raw_datasets = DatasetDict()
@@ -329,38 +411,39 @@ def main():
             f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
         )
 
-    if data_args.log_first_ids and data_args.id_column_name not in next(iter(raw_datasets.values())).column_names:
+    if data_args.file_column_name not in next(iter(raw_datasets.values())).column_names:
         raise ValueError(
-            f"--id_column_name {data_args.id_column_name} not found in dataset '{data_args.dataset_name}'. "
-            "Make sure to set `--id_column_name` to the correct id column - one of "
+            f"--file_column_name {data_args.file_column_name} not found in dataset '{data_args.dataset_name}'. "
+            "Make sure to set `--file_column_name` to the correct file column - one of "
             f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
         )
 
-
     # 6. Resample speech dataset ALWAYS
     raw_datasets = raw_datasets.cast_column(
-        data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
+        data_args.audio_column_name, datasets.features.Audio(sampling_rate=config.model.sample_rate)
     )
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
-    max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
-    min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
+    max_input_length = int(data_args.max_duration_in_seconds * config.model.sample_rate)
+    min_input_length = int(data_args.min_duration_in_seconds * config.model.sample_rate)
     max_target_length = data_args.max_target_length
     min_target_length = data_args.min_target_length
     audio_column_name = data_args.audio_column_name
     num_workers = data_args.preprocessing_num_workers
     text_column_name = data_args.text_column_name
+    file_column_name = data_args.file_column_name
     do_lower_case = data_args.do_lower_case
     dataset_name = data_args.dataset_name
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
-                    "[vocalized-noise]", "_1"]
+                        "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
     earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>",
+                       "<sil>", ""]
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -377,23 +460,27 @@ def main():
         return input_str.lower() not in ignore_segments
 
     raw_datasets = raw_datasets.filter(
-            is_target_labels,
-            num_proc=num_workers,
-            input_columns=[text_column_name],
-            desc="filtering data where the targets are ignored in scoring",
-        )
+        is_target_labels,
+        num_proc=num_workers,
+        input_columns=[text_column_name],
+        desc="filtering data where the targets are ignored in scoring",
+    )
 
     def prepare_dataset(batch):
         # process audio
         try:
             sample = batch[audio_column_name]
         except ValueError:
-            sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
+            sample = {"array": np.array([0.]), "sampling_rate": config.model.sampling_rate}
 
-        batch["input_length"] = sample["array"] / sample["sampling_rate"]
+        batch["input_length"] = len(sample["array"]) / sample["sampling_rate"]
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
+
+        if dataset_name == "google/xtreme_s":
+            batch[text_column_name] = input_str
+            return batch
 
         # Common Voice 9
         if input_str.startswith('"') and input_str.endswith('"'):
@@ -471,15 +558,16 @@ def main():
         input_columns=["input_length"],
     )
 
-    # filter data with targets shorter than min_target_length or longer than max_target_length
+    # TODO: filter data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(length):
         return length > min_target_length and length < max_target_length
 
-    vectorized_datasets = vectorized_datasets.filter(
-        is_labels_in_length_range,
-        num_proc=num_workers,
-        input_columns=["labels_length"],
-    )
+    if False:
+        vectorized_datasets = vectorized_datasets.filter(
+            is_labels_in_length_range,
+            num_proc=num_workers,
+            input_columns=["labels_length"],
+        )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -491,51 +579,83 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {cache}.")
         return
 
-    # Function to build a manifest
+    # Function to build a manifest from a HF dataset
     def build_manifest(ds, split, manifest_path):
         with open(manifest_path, 'w') as fout:
             for sample in tqdm(ds[split]):
-                audio = sample["audio"]
                 # Write the metadata to the manifest
                 metadata = {
-                    "audio_filepath": audio["path"],
-                    "duration": len(audio["array"]) / audio["sampling_rate"],
+                    "audio_filepath": sample[file_column_name],
+                    "duration": sample["input_length"],
                     "text": sample[text_column_name]
                 }
                 json.dump(metadata, fout)
                 fout.write('\n')
 
+    manifests = []
+
+    if not os.path.exists(model_args.manifest_path):
+        os.makedirs(model_args.manifest_path)
+
     if training_args.do_train:
-        TRAIN_MANIFEST = os.path.join(data_args.manifest_path, "train.json")
-        build_manifest(raw_datasets, "train", TRAIN_MANIFEST)
+        TRAIN_MANIFEST = os.path.join(model_args.manifest_path, "train.json")
+        build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
+        manifests.append(TRAIN_MANIFEST)
+        config.model.train_ds.manifest_filepath = TRAIN_MANIFEST
 
     if training_args.do_eval:
-        VAL_MANIFEST = os.path.join(data_args.manifest_path, "validation.json")
-        build_manifest(raw_datasets, "train", VAL_MANIFEST)
+        VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
+        build_manifest(vectorized_datasets, "train", VAL_MANIFEST)
+        manifests.append(VAL_MANIFEST)
+        config.model.validation_ds.manifest_filepath = VAL_MANIFEST
 
     if training_args.do_predict:
+        TEST_MANIFEST_PATH = []
         for split in test_split:
-            test_manifest_path = os.path.join(data_args.manifest_path, f"{split}.json")
-            build_manifest(raw_datasets, "train", test_manifest_path)
+            test_manifest_path = os.path.join(model_args.manifest_path, f"{split}.json")
+            build_manifest(vectorized_datasets, "train", test_manifest_path)
+            manifests.append(test_manifest_path)
+            TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
+        # TODO: handle multiple test sets
+        config.model.test_ds.manifest_filepath = ",".join(TEST_MANIFEST_PATH)
 
-    VOCAB_SIZE = 1024  # can be any value above 29
-    TOKENIZER_TYPE = "spe"  # can be wpe or spe
-    SPE_TYPE = "unigram"  # can be bpe or unigram
+    tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests)
 
-    # ------------------------------------------------------------------- #
-    !rm -r tokenizers/
+    config.model.tokenizer.dir = tokenizer_dir
+    config.model.tokenizer.type = tokenizer_type_cfg
 
-    if not os.path.exists("tokenizers"):
-      os.makedirs("tokenizers")
+    config.model.train_ds.batch_size = training_args.per_device_train_batch_size
+    config.model.validation_ds.batch_size = training_args.per_device_eval_batch_size
+    config.model.validation_ds.batch_size = training_args.per_device_eval_batch_size
 
-    !python scripts/process_asr_text_tokenizer.py \
-       --manifest="data/train_manifest.json" \
-       --data_root="tokenizers" \
-       --tokenizer="spe" \
-       --spe_type="unigram" \
-       --no_lower_case \
-       --log \
-       --vocab_size=1024
+    config.exp_manager.create_wandb_logger = True
+    if data_args.wandb_name:
+        config.exp_manager.wandb_logger_kwargs.name = data_args.wandb_name
+    config.exp_manager.wandb_logger_kwargs.project = data_args.wandb_project
+
+    config.model.optim.lr = training_args.learning_rate
+    # config.model.optim.sched.warmup_steps = training_args.warmup_steps
+
+    if torch.cuda.is_available():
+        accelerator = 'gpu'
+    else:
+        accelerator = 'gpu'
+
+    EPOCHS = 50
+
+    wandb_logger = WandbLogger(name=data_args.wandb_name, project=data_args.wandb_project)
+
+    # Initialize a Trainer for the Transducer model
+    trainer = Trainer(devices=1, accelerator=accelerator, max_epochs=EPOCHS,
+                      enable_checkpointing=False,
+                      log_every_n_steps=training_args.logging_steps, check_val_every_n_epoch=10, logger=wandb_logger)
+
+    model = EncDecRNNTBPEModel(cfg=config.model, trainer=trainer)
+
+    # Train the model
+    trainer.fit(model)
+
+    trainer.test(model)
 
 
 if __name__ == "__main__":
