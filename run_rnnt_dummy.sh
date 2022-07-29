@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 python run_speech_recognition_rnnt.py \
-        --model_name_or_path="config_rnnt_bpe.yaml" \
+        --model_name_or_path="conf/contextnet_rnnt.yaml" \
         --dataset_name="librispeech_asr" \
         --tokenizer_path="tokenizer" \
         --vocab_size="1024" \

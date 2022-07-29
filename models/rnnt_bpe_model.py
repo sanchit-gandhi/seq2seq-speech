@@ -20,8 +20,8 @@ class RNNTOutput(ModelOutput):
 
 
 class RNNTBPEModel(EncDecRNNTBPEModel):
-    def __init__(self, cfg: DictConfig, trainer=None):
-        super().__init__(cfg=cfg, trainer=trainer)
+    def __init__(self, cfg: DictConfig):
+        super().__init__(cfg=cfg, trainer=None)
 
     def encoding(
             self, input_signal=None, input_signal_length=None, processed_signal=None, processed_signal_length=None

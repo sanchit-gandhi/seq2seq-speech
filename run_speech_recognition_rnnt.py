@@ -262,6 +262,7 @@ class DataTrainingArguments:
 
 
 def build_tokenizer(model_args, data_args, manifests):
+    logger.info("Building tokenizer...")
     data_root = model_args.tokenizer_path
     joint_manifests = ",".join(manifests)
     vocab_size = model_args.vocab_size
@@ -561,16 +562,15 @@ def main():
         input_columns=["input_length"],
     )
 
-    # TODO: filter data with targets shorter than min_target_length or longer than max_target_length
-    def is_labels_in_length_range(length):
-        return length > min_target_length and length < max_target_length
+    # TODO: filter data with targets longer than max_target_length
+    def is_labels_in_length_range(transcription):
+        return len(transcription) > min_target_length
 
-    if False:
-        vectorized_datasets = vectorized_datasets.filter(
-            is_labels_in_length_range,
-            num_proc=num_workers,
-            input_columns=["labels_length"],
-        )
+    vectorized_datasets = vectorized_datasets.filter(
+        is_labels_in_length_range,
+        num_proc=num_workers,
+        input_columns=[text_column_name],
+    )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -600,28 +600,29 @@ def main():
     if not os.path.exists(model_args.manifest_path):
         os.makedirs(model_args.manifest_path)
 
+    config.train_ds = config.validation_ds = config.test_ds = None
     if training_args.do_train:
         TRAIN_MANIFEST = os.path.join(model_args.manifest_path, "train.json")
+        logger.info(f"Building training manifest at {TRAIN_MANIFEST}")
         build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
         manifests.append(TRAIN_MANIFEST)
         config.train_ds.manifest_filepath = TRAIN_MANIFEST
+        config.train_ds.max_duration = data_args.max_duration_in_seconds
         config.train_ds.batch_size = training_args.per_device_train_batch_size
-    else:
-        config.train_ds = None
 
     if training_args.do_eval:
         VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
+        logger.info(f"Building validation manifest at {VAL_MANIFEST}")
         build_manifest(vectorized_datasets, "eval", VAL_MANIFEST)
         manifests.append(VAL_MANIFEST)
         config.validation_ds.manifest_filepath = VAL_MANIFEST
         config.validation_ds.batch_size = training_args.per_device_eval_batch_size
-    else:
-        config.validation_ds = None
 
     if training_args.do_predict:
         TEST_MANIFEST_PATH = []
         for split in test_split:
             test_manifest_path = os.path.join(model_args.manifest_path, f"{split}.json")
+            logger.info(f"Building test manifest at {test_manifest_path}")
             build_manifest(vectorized_datasets, split, test_manifest_path)
             manifests.append(test_manifest_path)
             TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
