@@ -4,11 +4,12 @@ python run_speech_recognition_rnnt.py \
         --dataset_name="librispeech_asr" \
         --tokenizer_path="tokenizer" \
         --vocab_size="1024" \
-        --num_train_epochs="3" \
+        --num_train_epochs="20" \
+        --evaluation_strategy="epoch" \
         --dataset_config_name="clean" \
-        --train_split_name="train" \
+        --train_split_name="train.100" \
         --eval_split_name="validation" \
-        --test_split_name="validation" \
+        --test_split_name="test" \
         --text_column_name="text" \
         --file_column_name="file" \
         --output_dir="./" \
