@@ -19,6 +19,7 @@ Fine-tuning the Flax library models for connectionist temporal classification (C
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 
 import logging
+import math
 import os
 import re
 import sys
@@ -39,7 +40,7 @@ import optax
 import transformers
 import wandb as wandb
 from flax import core, jax_utils, struct, traverse_util
-from flax.jax_utils import unreplicate
+from flax.jax_utils import unreplicate, pad_shard_unpad
 from flax.training.common_utils import get_metrics, shard, shard_prng_key
 from huggingface_hub import Repository
 from models import Wav2Vec2Config, FlaxWav2Vec2ForCTC
@@ -517,16 +518,20 @@ def get_grouped_indices(
     return megabatches
 
 
-def generate_batch_splits(samples_idx: np.ndarray, batch_size: int) -> np.ndarray:
+def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last=True) -> np.ndarray:
     """Generate batches of data for a specified batch size from sample indices. If the dataset size is not divisible by
-    the batch size, the last incomplete batch is dropped."""
+    the batch size and `drop_last` is `True`, the last incomplete batch is dropped. Else, it is returned."""
     num_samples = len(samples_idx)
-    samples_to_remove = num_samples % batch_size
-
-    if samples_to_remove != 0:
-        samples_idx = samples_idx[:-samples_to_remove]
-    sections_split = num_samples // batch_size
-    return samples_idx.reshape((sections_split, batch_size))
+    if drop_last:
+        samples_to_remove = num_samples % batch_size
+        if samples_to_remove != 0:
+            samples_idx = samples_idx[:-samples_to_remove]
+        sections_split = num_samples // batch_size
+        samples_idx = samples_idx.reshape((sections_split, batch_size))
+    else:
+        sections_split = math.ceil(num_samples / batch_size)
+        samples_idx = np.array_split(samples_idx, sections_split)
+    return samples_idx
 
 
 def data_loader(dataset, batch_size, rng, sampler, collator):
@@ -1152,6 +1157,7 @@ def main():
     gradient_accumulation_steps = int(training_args.gradient_accumulation_steps)
     train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count()
     batch_size_per_update = train_batch_size * gradient_accumulation_steps
+    per_device_eval_batch_size = int(training_args.per_device_eval_batch_size)
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
     to_dtype = to_bf16 if training_args.mixed_precision else to_fp32
 
@@ -1333,19 +1339,18 @@ def main():
 
             # Generate eval set by sequentially sampling indices from the eval dataset and grouping by length
             eval_samples_idx = get_grouped_indices(vectorized_datasets["eval"], eval_batch_size)
-            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size, drop_last=False)
 
             for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
                 samples = [vectorized_datasets["eval"][int(idx)] for idx in batch_idx]
                 batch = data_collator(samples)
-                batch = shard(batch.data)
                 labels = batch["labels"]
 
-                metrics, logits = p_eval_step(state.params, batch)
+                metrics, logits = pad_shard_unpad(p_eval_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
                 eval_preds.extend(jax.device_get(logits.reshape(-1, *logits.shape[-2:])))
                 eval_metrics.append(metrics)
 
-                eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+                eval_labels.extend(labels)
 
             # normalize eval metrics
             eval_metrics = get_metrics(eval_metrics)
@@ -1457,19 +1462,18 @@ def main():
 
             # Generate eval set by sequentially sampling indices from the test dataset and grouping by length
             eval_samples_idx = get_grouped_indices(vectorized_datasets[split], eval_batch_size)
-            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+            eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size, drop_last=False)
 
             for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc=f"Predicting {split}...", position=2)):
                 samples = [vectorized_datasets[split][int(idx)] for idx in batch_idx]
                 batch = data_collator(samples)
-                batch = shard(batch.data)
                 labels = batch["labels"]
 
-                metrics, logits = p_eval_step(state.params, batch)
+                metrics, logits = pad_shard_unpad(p_eval_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
                 eval_preds.extend(jax.device_get(logits.reshape(-1, *logits.shape[-2:])))
                 eval_metrics.append(metrics)
 
-                eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
+                eval_labels.extend(labels)
 
             # normalize eval metrics
             eval_metrics = get_metrics(eval_metrics)
