@@ -971,7 +971,10 @@ def main():
 
     def prepare_dataset(batch):
         # process audio
-        sample = batch[audio_column_name]
+        try:
+            sample = batch[audio_column_name]
+        except ValueError:
+            sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
@@ -979,6 +982,12 @@ def main():
 
         # process targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
+
+        if dataset_name == "google/xtreme_s":
+            # Finally, we tokenize the processed text
+            batch["labels"] = tokenizer(input_str).input_ids
+            batch["labels_length"] = len(batch["labels"])
+            return batch
 
         # Common Voice 9
         if input_str.startswith('"') and input_str.endswith('"'):
@@ -992,10 +1001,10 @@ def main():
         input_str = re.sub(r"[—–]", "-", input_str)
         # replace double quotation marks with single
         input_str = input_str.replace('""', '"')
-        # if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
+        if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
-            # if input_str[-1] not in [".", "?", "!"]:
-                # input_str = input_str + "."
+            if input_str[-1] not in [".", "?", "!"]:
+                input_str = input_str + "."
 
         # TEDLIUM-3
         # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
@@ -1007,10 +1016,10 @@ def main():
         # convert spelled out punctuation to symbolic form
         for punctuation, replacement in gigaspeech_punctuation.items():
             input_str = input_str.replace(punctuation, replacement)
-        # if dataset_name == "speechcolab/gigaspeech" and len(input_str):
+        if dataset_name == "speechcolab/gigaspeech" and len(input_str):
             # for GS, we'll normalize the text to always finish with punctuation
-            # if input_str[-1] not in [".", "?", "!"]:
-                # input_str = input_str + "."
+            if input_str[-1] not in [".", "?", "!"]:
+                input_str = input_str + "."
 
         # SWB
         for disfluency in swb_disfluencies:
