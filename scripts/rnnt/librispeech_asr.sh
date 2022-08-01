@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+python ../../run_speech_recognition_rnnt.py \
+        --model_name_or_path="conf/contextnet_rnnt.yaml" \
+        --dataset_name="librispeech_asr" \
+        --tokenizer_path="tokenizer" \
+        --vocab_size="1024" \
+        --num_train_epochs="12" \
+        --evaluation_strategy="epoch" \
+        --dataset_config_name="all" \
+        --train_split_name="train.clean.100+train.clean.360+train.other.500" \
+        --eval_split_name="validation.clean" \
+        --test_split_name="test.clean" \
+        --text_column_name="text" \
+        --file_column_name="file" \
+        --output_dir="./" \
+        --run_name="rnnt-ls-960h-baseline" \
+        --wandb_project="librispeech_960h" \
+        --per_device_train_batch_size="8" \
+        --per_device_eval_batch_size="4" \
+        --logging_steps="25" \
+        --learning_rate="1e-4" \
+        --warmup_steps="2000" \
+        --save_steps="25000" \
+        --report_to="wandb" \
+        --push_to_hub="False" \
+        --overwrite_output_dir \
+        --fp16 \
+        --do_lower_case \
+        --do_eval \
+        --do_train
+        # --do_predict

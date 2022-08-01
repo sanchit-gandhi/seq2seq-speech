@@ -58,8 +58,15 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
-      <webServer id="e27a51d3-43c4-4cbf-a2b9-74b5881bf5d4" name="single-v100">
-        <fileTransfer accessType="SFTP" host="35.232.217.68" port="22" sshConfigId="70b6b7da-51d3-4bc7-bfe9-1f0b24b5cb35" sshConfig="sanchit_huggingface_co@35.232.217.68:22 key" keyPair="true">
+      <webServer id="06a3bfd0-def5-489a-93ba-45d4db61fc70" name="single-v100">
+        <fileTransfer accessType="SFTP" host="35.232.217.68" port="22" sshConfigId="70b6b7da-51d3-4bc7-bfe9-1f0b24b5cb35" sshConfig="single-v100" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="eda48cad-34a2-4f8a-beac-b3a25bdad070" name="two-v100s">
+        <fileTransfer accessType="SFTP" host="34.121.156.54" port="22" sshConfigId="f71a0007-5d24-472b-87e7-ebfd6e4e4545" sshConfig="two-v100s" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>

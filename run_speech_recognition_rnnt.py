@@ -251,14 +251,6 @@ class DataTrainingArguments:
         default="speech-recognition-rnnt",
         metadata={"help": "The name of the wandb project."},
     )
-    wandb_name: str = field(
-        default=None,
-        metadata={"help": "The name of the wandb run."},
-    )
-    wandb_job_type: str = field(
-        default="RNN-T",
-        metadata={"help": "The name of the wandb job type."},
-    )
 
 
 def build_tokenizer(model_args, data_args, manifests):
@@ -572,6 +564,20 @@ def main():
         input_columns=[text_column_name],
     )
 
+    def map_path(batch):
+        batch[file_column_name] = os.path.join(
+            "/home/sanchit_huggingface_co/.cache/huggingface/datasets/downloads/extracted/95928449a1c1023847e39aea820585b24bdd32ea485e73491df78d114282043e",
+            batch[file_column_name]
+        )
+        return batch
+
+    if training_args.do_eval and data_args.dataset_name == "librispeech_asr":
+        vectorized_datasets["eval"] = vectorized_datasets["eval"].map(
+            map_path,
+            num_proc=num_workers,
+            desc="fixing eval path",
+        )
+
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
     # be a timeout when running the script in distributed mode.
@@ -600,7 +606,6 @@ def main():
     if not os.path.exists(model_args.manifest_path):
         os.makedirs(model_args.manifest_path)
 
-    config.train_ds = config.validation_ds = config.test_ds = None
     if training_args.do_train:
         TRAIN_MANIFEST = os.path.join(model_args.manifest_path, "train.json")
         logger.info(f"Building training manifest at {TRAIN_MANIFEST}")
@@ -609,14 +614,18 @@ def main():
         config.train_ds.manifest_filepath = TRAIN_MANIFEST
         config.train_ds.max_duration = data_args.max_duration_in_seconds
         config.train_ds.batch_size = training_args.per_device_train_batch_size
+    else:
+        config.train_ds = None
 
     if training_args.do_eval:
         VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
         logger.info(f"Building validation manifest at {VAL_MANIFEST}")
         build_manifest(vectorized_datasets, "eval", VAL_MANIFEST)
-        manifests.append(VAL_MANIFEST)
+        # manifests.append(VAL_MANIFEST)
         config.validation_ds.manifest_filepath = VAL_MANIFEST
         config.validation_ds.batch_size = training_args.per_device_eval_batch_size
+    else:
+        config.validation_ds = None
 
     if training_args.do_predict:
         TEST_MANIFEST_PATH = []
@@ -624,11 +633,13 @@ def main():
             test_manifest_path = os.path.join(model_args.manifest_path, f"{split}.json")
             logger.info(f"Building test manifest at {test_manifest_path}")
             build_manifest(vectorized_datasets, split, test_manifest_path)
-            manifests.append(test_manifest_path)
+            # manifests.append(test_manifest_path)
             TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
         # TODO: handle multiple test sets
         config.test_ds.manifest_filepath = ",".join(TEST_MANIFEST_PATH)
         config.test_ds.batch_size = training_args.per_device_eval_batch_size
+    else:
+        config.test_ds = None
 
     tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests)
 
@@ -681,7 +692,10 @@ def main():
             Subclass and override for custom behavior.
             """
             if isinstance(inputs, list):
-                inputs = {"inputs": inputs[0], "input_lengths": inputs[1], "labels": inputs[2], "label_lengths": inputs[3], "compute_wer": False}
+                inputs = {"inputs": inputs[0], "input_lengths": inputs[1], "labels": inputs[2],
+                          "label_lengths": inputs[3], "compute_wer": False}
+
+            # copied from...
             if self.label_smoother is not None and "labels" in inputs:
                 labels = inputs.pop("labels")
             else:
@@ -731,7 +745,10 @@ def main():
                 logits and labels (each being optional).
             """
             if isinstance(inputs, list):
-                inputs = {"inputs": inputs[0], "input_lengths": inputs[1], "labels": inputs[2], "label_lengths": inputs[3], "compute_wer": True}
+                inputs = {"inputs": inputs[0], "input_lengths": inputs[1], "labels": inputs[2],
+                          "label_lengths": inputs[3], "compute_wer": True}
+
+            # copied from...
             has_labels = all(inputs.get(k) is not None for k in self.label_names)
             inputs = self._prepare_inputs(inputs)
             if ignore_keys is None:
@@ -779,6 +796,7 @@ def main():
 
             return (loss, logits, labels)
 
+    os.environ["WANDB_PROJECT"] = data_args.wandb_project
 
     # Initialize Trainer
     trainer = RNNTTrainer(
@@ -786,7 +804,6 @@ def main():
         args=training_args,
         optimizers=optimizers,
         compute_metrics=compute_metrics,
-        # callbacks=[aim_callback],
     )
 
     # 8. Finally, we can start training

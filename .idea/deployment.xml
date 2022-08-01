@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="single-v100" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="patrick-tpu">
         <serverdata>
@@ -59,6 +59,13 @@
         </serverdata>
       </paths>
       <paths name="transformers-testing">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="two-v100s">
         <serverdata>
           <mappings>
             <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
