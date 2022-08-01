@@ -587,11 +587,11 @@ def get_grouped_indices(
     return megabatches
 
 
-def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last=True) -> np.ndarray:
+def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last_batch=True) -> np.ndarray:
     """Generate batches of data for a specified batch size from sample indices. If the dataset size is not divisible by
     the batch size and `drop_last` is `True`, the last incomplete batch is dropped. Else, it is returned."""
     num_samples = len(samples_idx)
-    if drop_last:
+    if drop_last_batch:
         samples_to_remove = num_samples % batch_size
         if samples_to_remove != 0:
             samples_idx = samples_idx[:-samples_to_remove]
