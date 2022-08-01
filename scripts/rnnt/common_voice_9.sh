@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+python ../../run_speech_recognition_rnnt.py \
+        --model_name_or_path="conf/contextnet_rnnt.yaml" \
+        --dataset_name="mozilla-foundation/common_voice_9_0" \
+        --tokenizer_path="tokenizer" \
+        --vocab_size="1024" \
+        --num_train_epochs="4" \
+        --evaluation_strategy="epoch" \
+        --dataset_config_name="en" \
+        --train_split_name="train" \
+        --eval_split_name="validation" \
+        --test_split_name="test" \
+        --text_column_name="sentence" \
+        --file_column_name="path" \
+        --output_dir="./" \
+        --run_name="rnnt-ls-960h-baseline" \
+        --wandb_project="librispeech_960h" \
+        --per_device_train_batch_size="8" \
+        --per_device_eval_batch_size="4" \
+        --logging_steps="25" \
+        --learning_rate="1e-4" \
+        --warmup_steps="2000" \
+        --save_steps="25000" \
+        --report_to="wandb" \
+        --push_to_hub="False" \
+        --overwrite_output_dir \
+        --fp16 \
+        --do_lower_case \
+        --do_eval \
+        --do_train
+        # --do_predict
