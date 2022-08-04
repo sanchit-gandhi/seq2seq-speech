@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-python ../../run_speech_recognition_rnnt.py \
+python run_speech_recognition_rnnt.py \
         --model_name_or_path="conf/contextnet_rnnt.yaml" \
-        --dataset_name="librispeech_asr" \
+        --dataset_name="sanchit-gandhi/librispeech_asr_paths" \
         --tokenizer_path="tokenizer" \
         --vocab_size="1024" \
         --num_train_epochs="12" \
@@ -23,6 +23,7 @@ python ../../run_speech_recognition_rnnt.py \
         --save_steps="25000" \
         --report_to="wandb" \
         --push_to_hub="False" \
+        --preprocessing_num_workers="1" \
         --overwrite_output_dir \
         --fp16 \
         --do_lower_case \

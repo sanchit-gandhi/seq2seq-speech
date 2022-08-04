@@ -9,7 +9,7 @@
           </mappings>
         </serverdata>
       </paths>
-      <paths name="single-v100">
+      <paths name="sanchit-v100">
         <serverdata>
           <mappings>
             <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
@@ -59,13 +59,6 @@
         </serverdata>
       </paths>
       <paths name="transformers-testing">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="two-v100s">
         <serverdata>
           <mappings>
             <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />

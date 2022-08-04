@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python ../../run_speech_recognition_rnnt.py \
+python run_speech_recognition_rnnt.py \
         --model_name_or_path="conf/contextnet_rnnt.yaml" \
         --dataset_name="mozilla-foundation/common_voice_9_0" \
         --tokenizer_path="tokenizer" \
@@ -13,8 +13,8 @@ python ../../run_speech_recognition_rnnt.py \
         --text_column_name="sentence" \
         --file_column_name="path" \
         --output_dir="./" \
-        --run_name="rnnt-ls-960h-baseline" \
-        --wandb_project="librispeech_960h" \
+        --run_name="rnnt-cv9-baseline" \
+        --wandb_project="common_voice_9_0" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="4" \
         --logging_steps="25" \
@@ -23,6 +23,7 @@ python ../../run_speech_recognition_rnnt.py \
         --save_steps="25000" \
         --report_to="wandb" \
         --push_to_hub="False" \
+        --preprocessing_num_workers="1" \
         --overwrite_output_dir \
         --fp16 \
         --do_lower_case \

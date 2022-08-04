@@ -20,11 +20,8 @@
       <sshConfig host="35.204.7.21" id="4b5e0687-8532-48b2-ab54-47cf488b8282" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="patrick-tpu" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
         <option name="customName" value="patrick-tpu" />
       </sshConfig>
-      <sshConfig host="35.232.217.68" id="70b6b7da-51d3-4bc7-bfe9-1f0b24b5cb35" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="single-v100" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
-        <option name="customName" value="single-v100" />
-      </sshConfig>
-      <sshConfig host="34.121.156.54" id="f71a0007-5d24-472b-87e7-ebfd6e4e4545" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="two-v100s" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
-        <option name="customName" value="two-v100s" />
+      <sshConfig connectionConfig="{&quot;serverAliveInterval&quot;:300}" host="34.121.156.54" id="77bc003c-4318-40ec-8623-f2be11daf8ee" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="sanchit-v100" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
+        <option name="customName" value="sanchit-v100" />
       </sshConfig>
     </configs>
   </component>

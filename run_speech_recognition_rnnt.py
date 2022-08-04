@@ -564,20 +564,6 @@ def main():
         input_columns=[text_column_name],
     )
 
-    def map_path(batch):
-        batch[file_column_name] = os.path.join(
-            "/home/sanchit_huggingface_co/.cache/huggingface/datasets/downloads/extracted/95928449a1c1023847e39aea820585b24bdd32ea485e73491df78d114282043e",
-            batch[file_column_name]
-        )
-        return batch
-
-    if training_args.do_eval and data_args.dataset_name == "librispeech_asr":
-        vectorized_datasets["eval"] = vectorized_datasets["eval"].map(
-            map_path,
-            num_proc=num_workers,
-            desc="fixing eval path",
-        )
-
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
     # be a timeout when running the script in distributed mode.
