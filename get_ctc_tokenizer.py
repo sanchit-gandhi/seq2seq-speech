@@ -6,7 +6,6 @@ import os
 import re
 import tempfile
 from transformers import Wav2Vec2CTCTokenizer
-from run_flax_speech_recognition_ami_ctc import chunk_audio, chunk_into_max_n_seconds
 
 # which dataset
 dataset_name = "kensho/spgispeech"
@@ -38,11 +37,6 @@ dataset = load_dataset(
     use_auth_token=use_auth_token,
     cache_dir=dataset_cache_dir,
 )
-
-if dataset_name == "ami":
-    dataset = dataset.map(chunk_audio, batched=True, batch_size=1, remove_columns=dataset.column_names, desc="chunk audio")
-    dataset = dataset.map(chunk_into_max_n_seconds, batched=True, batch_size=1, remove_columns=dataset.column_names,
-                      num_proc=64, desc="chunk by time")
 
 # remove all data that is unnecessary to save RAM
 dataset = dataset.remove_columns(list(set(dataset.column_names) - set([text_column])))
