@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-python run_speech_recognition_rnnt.py \
+CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_rnnt.py \
         --model_name_or_path="conf/contextnet_rnnt.yaml" \
         --dataset_name="mozilla-foundation/common_voice_9_0" \
         --tokenizer_path="tokenizer" \
@@ -23,7 +23,8 @@ python run_speech_recognition_rnnt.py \
         --save_steps="25000" \
         --report_to="wandb" \
         --push_to_hub="False" \
-        --preprocessing_num_workers="1" \
+        --preprocessing_num_workers="4" \
+        --use_auth_token \
         --overwrite_output_dir \
         --fp16 \
         --do_lower_case \
