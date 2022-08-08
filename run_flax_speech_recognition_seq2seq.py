@@ -1353,14 +1353,14 @@ def main():
                 # generation
                 if training_args.predict_with_generate:
                     if not final_step:
-                        generated_ids = pad_shard_unpad(p_generate_step)(state.params, batch.data)
+                        generated_ids = pad_shard_unpad(p_generate_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
                         eval_preds.extend(
                             jax.device_get(
                                 generated_ids.reshape(-1, gen_kwargs["num_beams"], gen_kwargs["max_length"])
                             )
                         )
                     else:
-                        generated_ids = pad_shard_unpad(p_final_generate_step)(state.params, batch.data)
+                        generated_ids = pad_shard_unpad(p_final_generate_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
                         eval_preds.extend(
                             jax.device_get(
                                 generated_ids.reshape(
@@ -1505,7 +1505,8 @@ def main():
                 pred_ids.extend(batch.pop("input_ids"))
                 labels = batch["labels"]
 
-                metrics = pad_shard_unpad(p_eval_step, static_return=True)(state.params, batch.data)
+                metrics = pad_shard_unpad(p_eval_step, static_return=True)(state.params, batch.data,
+                                                                           min_device_batch=per_device_eval_batch_size)
                 pred_metrics.append(metrics)
 
                 # generation
