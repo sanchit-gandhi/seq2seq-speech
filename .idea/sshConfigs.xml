@@ -23,6 +23,9 @@
       <sshConfig connectionConfig="{&quot;serverAliveInterval&quot;:300}" host="34.121.156.54" id="77bc003c-4318-40ec-8623-f2be11daf8ee" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="sanchit-v100" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
         <option name="customName" value="sanchit-v100" />
       </sshConfig>
+      <sshConfig host="34.67.69.143" id="2bc21e05-9882-4b1f-8da6-75113371ad77" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="patrick-a100" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
+        <option name="customName" value="patrick-a100" />
+      </sshConfig>
     </configs>
   </component>
 </project>

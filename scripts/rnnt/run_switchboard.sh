@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=0 python run_speech_recognition_rnnt.py \
+CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_rnnt.py \
         --model_name_or_path="conf/contextnet_rnnt.yaml" \
-        --dataset_name="sanchit-gandhi/librispeech_asr_paths" \
+        --dataset_name="ldc/switchboard" \
         --tokenizer_path="tokenizer" \
         --vocab_size="1024" \
-        --num_train_epochs="12" \
+        --num_train_epochs="14" \
         --evaluation_strategy="epoch" \
-        --dataset_config_name="all" \
-        --train_split_name="train.clean.100+train.clean.360+train.other.500" \
-        --eval_split_name="validation.clean" \
-        --test_split_name="test.clean" \
+        --dataset_config_name="switchboard" \
+        --train_split_name="train" \
+        --eval_split_name="validation" \
+        --test_split_name="test" \
         --text_column_name="text" \
         --file_column_name="file" \
         --output_dir="./" \
-        --run_name="rnnt-ls-960h-baseline" \
-        --wandb_project="librispeech_960h" \
+        --run_name="rnnt-switchboard-baseline" \
+        --wandb_project="rnnt" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="4" \
         --logging_steps="25" \
@@ -30,5 +30,6 @@ CUDA_VISIBLE_DEVICES=0 python run_speech_recognition_rnnt.py \
         --fp16 \
         --do_lower_case \
         --do_eval \
-        --do_train
+        --do_train \
+        --use_auth_token
         # --do_predict

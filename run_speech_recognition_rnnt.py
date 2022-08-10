@@ -251,42 +251,51 @@ class DataTrainingArguments:
         default="speech-recognition-rnnt",
         metadata={"help": "The name of the wandb project."},
     )
+    build_tokenizer: bool = field(
+        default=True,
+        metadata={"help": "Whether or not to build the tokenizer"}
+    )
+    build_manifests: bool = field(
+        default=True,
+        metadata={"help": "Whether or not to build the manifests"}
+    )
 
 
-def build_tokenizer(model_args, data_args, manifests):
-    logger.info("Building tokenizer...")
+def build_tokenizer(model_args, data_args, manifests, from_scratch=True):
     data_root = model_args.tokenizer_path
     joint_manifests = ",".join(manifests)
     vocab_size = model_args.vocab_size
     tokenizer = model_args.tokenizer_type
     spe_type = model_args.spe_type
 
-    if not os.path.exists(data_root):
-        os.makedirs(data_root)
-    else:
-        os.system(f"rm -rf {data_root}")
-        os.makedirs(data_root)
+    if from_scratch:
+        logger.info("Building tokenizer...")
+        if not os.path.exists(data_root):
+            os.makedirs(data_root)
+        else:
+            os.system(f"rm -rf {data_root}")
+            os.makedirs(data_root)
 
-    text_corpus_path = nemo_build_document_from_manifests(data_root, joint_manifests)
+        text_corpus_path = nemo_build_document_from_manifests(data_root, joint_manifests)
 
-    tokenizer_path = nemo_process_data(
-        text_corpus_path,
-        data_root,
-        vocab_size,
-        tokenizer,
-        spe_type,
-        lower_case=data_args.do_lower_case,
-        spe_character_coverage=1.0,
-        spe_sample_size=-1,
-        spe_train_extremely_large_corpus=False,
-        spe_max_sentencepiece_length=-1,
-        spe_bos=False,
-        spe_eos=False,
-        spe_pad=False,
-    )
+        tokenizer_path = nemo_process_data(
+            text_corpus_path,
+            data_root,
+            vocab_size,
+            tokenizer,
+            spe_type,
+            lower_case=data_args.do_lower_case,
+            spe_character_coverage=1.0,
+            spe_sample_size=-1,
+            spe_train_extremely_large_corpus=False,
+            spe_max_sentencepiece_length=-1,
+            spe_bos=False,
+            spe_eos=False,
+            spe_pad=False,
+        )
 
-    print("Serialized tokenizer at location :", tokenizer_path)
-    logger.info('Done!')
+        print("Serialized tokenizer at location :", tokenizer_path)
+        logger.info('Done!')
 
     # Tokenizer path
     if tokenizer == 'spe':
@@ -594,8 +603,9 @@ def main():
 
     if training_args.do_train:
         TRAIN_MANIFEST = os.path.join(model_args.manifest_path, "train.json")
-        logger.info(f"Building training manifest at {TRAIN_MANIFEST}")
-        build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
+        if data_args.build_manifests:
+            logger.info(f"Building training manifest at {TRAIN_MANIFEST}")
+            build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
         manifests.append(TRAIN_MANIFEST)
         config.train_ds.manifest_filepath = TRAIN_MANIFEST
         config.train_ds.max_duration = data_args.max_duration_in_seconds
@@ -605,20 +615,22 @@ def main():
 
     if training_args.do_eval:
         VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
-        logger.info(f"Building validation manifest at {VAL_MANIFEST}")
-        build_manifest(vectorized_datasets, "eval", VAL_MANIFEST)
+        if data_args.build_manifests:
+            logger.info(f"Building validation manifest at {VAL_MANIFEST}")
+            build_manifest(vectorized_datasets, "eval", VAL_MANIFEST)
         # manifests.append(VAL_MANIFEST)
         config.validation_ds.manifest_filepath = VAL_MANIFEST
         config.validation_ds.batch_size = training_args.per_device_eval_batch_size
     else:
         config.validation_ds = None
 
-    if training_args.do_predict:
+    if training_args.do_predict and data_args.build_manifests:
         TEST_MANIFEST_PATH = []
         for split in test_split:
             test_manifest_path = os.path.join(model_args.manifest_path, f"{split}.json")
-            logger.info(f"Building test manifest at {test_manifest_path}")
-            build_manifest(vectorized_datasets, split, test_manifest_path)
+            if data_args.build_manifests:
+                logger.info(f"Building test manifest at {test_manifest_path}")
+                build_manifest(vectorized_datasets, split, test_manifest_path)
             # manifests.append(test_manifest_path)
             TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
         # TODO: handle multiple test sets
@@ -627,7 +639,7 @@ def main():
     else:
         config.test_ds = None
 
-    tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests)
+    tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests, from_scratch=data_args.build_tokenizer)
 
     config.tokenizer.dir = tokenizer_dir
     config.tokenizer.type = tokenizer_type_cfg

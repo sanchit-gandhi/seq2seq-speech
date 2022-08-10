@@ -65,6 +65,13 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="7edbd4d2-39fe-4b1d-a70c-34f17558b513" name="patrick-a100">
+        <fileTransfer accessType="SFTP" host="34.67.69.143" port="22" sshConfigId="2bc21e05-9882-4b1f-8da6-75113371ad77" sshConfig="patrick-a100" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
     <groups>
       <group>
