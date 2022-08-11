@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=0 python run_speech_recognition_rnnt.py \
-        --model_name_or_path="conf/contextnet_rnnt.yaml" \
+CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_rnnt.py \
+        --model_name_or_path="conf/dummy_contextnet_rnnt.yaml" \
         --dataset_name="hf-internal-testing/librispeech_asr_dummy" \
         --tokenizer_path="tokenizer" \
         --vocab_size="1024" \
@@ -23,8 +23,6 @@ CUDA_VISIBLE_DEVICES=0 python run_speech_recognition_rnnt.py \
         --report_to="wandb" \
         --push_to_hub="False" \
         --preprocessing_num_workers="4" \
-        --build_tokenizer="False" \
-        --build_manifests="False" \
         --overwrite_output_dir \
         --fp16 \
         --do_lower_case \

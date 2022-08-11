@@ -251,51 +251,49 @@ class DataTrainingArguments:
         default="speech-recognition-rnnt",
         metadata={"help": "The name of the wandb project."},
     )
-    build_tokenizer: bool = field(
-        default=True,
-        metadata={"help": "Whether or not to build the tokenizer"}
-    )
-    build_manifests: bool = field(
-        default=True,
-        metadata={"help": "Whether or not to build the manifests"}
-    )
 
 
-def build_tokenizer(model_args, data_args, manifests, from_scratch=True):
+def build_tokenizer(model_args, data_args, manifests):
+    """
+    Function to build a NeMo tokenizer from manifest file(s).
+    Copied from https://github.com/NVIDIA/NeMo/blob/66c7677cd4a68d78965d4905dd1febbf5385dff3/scripts/tokenizers/process_asr_text_tokenizer.py#L268
+    """
     data_root = model_args.tokenizer_path
-    joint_manifests = ",".join(manifests)
+    if isinstance(manifests, list):
+        joint_manifests = ",".join(manifests)
+    else:
+        joint_manifests = manifests
     vocab_size = model_args.vocab_size
     tokenizer = model_args.tokenizer_type
     spe_type = model_args.spe_type
 
-    if from_scratch:
-        logger.info("Building tokenizer...")
-        if not os.path.exists(data_root):
-            os.makedirs(data_root)
-        else:
-            os.system(f"rm -rf {data_root}")
-            os.makedirs(data_root)
+    logger.info("Building tokenizer...")
+    if not os.path.exists(data_root):
+        os.makedirs(data_root)
+    else:
+        os.system(f"rm -rf {data_root}")
+        os.makedirs(data_root)
 
-        text_corpus_path = nemo_build_document_from_manifests(data_root, joint_manifests)
+    text_corpus_path = nemo_build_document_from_manifests(data_root, joint_manifests)
 
-        tokenizer_path = nemo_process_data(
-            text_corpus_path,
-            data_root,
-            vocab_size,
-            tokenizer,
-            spe_type,
-            lower_case=data_args.do_lower_case,
-            spe_character_coverage=1.0,
-            spe_sample_size=-1,
-            spe_train_extremely_large_corpus=False,
-            spe_max_sentencepiece_length=-1,
-            spe_bos=False,
-            spe_eos=False,
-            spe_pad=False,
-        )
+    tokenizer_path = nemo_process_data(
+        text_corpus_path,
+        data_root,
+        vocab_size,
+        tokenizer,
+        spe_type,
+        lower_case=data_args.do_lower_case,
+        spe_character_coverage=1.0,
+        spe_sample_size=-1,
+        spe_train_extremely_large_corpus=False,
+        spe_max_sentencepiece_length=-1,
+        spe_bos=False,
+        spe_eos=False,
+        spe_pad=False,
+    )
 
-        print("Serialized tokenizer at location :", tokenizer_path)
-        logger.info('Done!')
+    print("Serialized tokenizer at location :", tokenizer_path)
+    logger.info('Done!')
 
     # Tokenizer path
     if tokenizer == 'spe':
@@ -307,6 +305,36 @@ def build_tokenizer(model_args, data_args, manifests, from_scratch=True):
 
     return tokenizer_dir, tokenizer_type_cfg
 
+
+def NeMoDataCollator(features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+    """
+    Data collator that will dynamically pad the inputs received.
+    Since NeMo models don't have a HF processor defined (feature extractor + tokenizer), we'll pad by hand...
+    The padding idx is arbitrary: we provide the model with the input lengths and label lengths, from which
+    all the relevant padding information is inferred. Thus, we'll use the default np.pad padding idx (0).
+    """
+    # split inputs and labels since they have to be of different lengths
+    # and need different padding methods
+    input_values = [feature["input_values"] for feature in features]
+    labels = [feature["labels"] for feature in features]
+
+    # first, pad the audio inputs to max_len
+    input_lengths = [len(inp_val) for inp_val in input_values]
+    max_input_len = max(input_lengths)
+    input_values = [np.pad(input_val, (0, max_input_len - input_len), 'constant') for input_val, input_len in
+                    zip(input_values, input_lengths)]
+
+    # next, pad the target labels to max_len
+    label_lengths = [len(lab) for lab in labels]
+    max_label_len = max(label_lengths)
+    labels = [np.pad(lab, (0, max_label_len - lab_len), 'constant') for lab, lab_len in zip(labels, label_lengths)]
+
+    batch = {"input_values": input_values, "input_lengths": input_lengths, "labels": labels, "label_lengths": label_lengths}
+
+    # return batch as a pt tensor (list -> np.array -> torch.tensor)
+    batch = {k: torch.tensor(np.array(v), requires_grad=False).float() for k, v in batch.items()}
+
+    return batch
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -440,6 +468,8 @@ def main():
     file_column_name = data_args.file_column_name
     do_lower_case = data_args.do_lower_case
     dataset_name = data_args.dataset_name
+    # Define tokens to ignore/replace
+    # TODO: clean-this up... It's currently a bit of a mess, sorry!
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
@@ -476,11 +506,20 @@ def main():
         try:
             sample = batch[audio_column_name]
         except ValueError:
+            # E22: some samples are empty (no audio). Reading the empty audio array will trigger
+            # a soundfile ValueError. For now, we'll manually set these arrays to a zero array.
+            # They will be filtered in the subsequent filtering stage and so are
+            # explicitly ignored during training.
+            # TODO: clean-up E22 dataset to remove these samples
             sample = {"array": np.array([0.]), "sampling_rate": config.sampling_rate}
 
-        batch["input_length"] = len(sample["array"]) / sample["sampling_rate"]
+        # NeMo RNNT model performs the audio preprocessing in the `.forward()` call
+        # => we only need to supply it with the raw audio values
+        batch["input_values"] = sample["array"]
+        batch["input_lengths"] = len(sample["array"]) / sample["sampling_rate"]
 
-        # process targets
+        # Process targets. Note: this is quite lengthy as we perform any necessary processing
+        # for each of the 8 datasets in the benchmark
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
 
         if dataset_name == "google/xtreme_s":
@@ -544,6 +583,9 @@ def main():
         # strip trailing spaces
         input_str = input_str.strip()
 
+        # We can't currently tokenize the dataset... we need the pre-processed text data in order to
+        # build our SPE tokenizer. Once we've defined our tokenizer, we can come back and
+        # tokenize the text. For now, returned the pre-processed text data
         batch[text_column_name] = input_str
         return batch
 
@@ -560,7 +602,7 @@ def main():
     vectorized_datasets = vectorized_datasets.filter(
         is_audio_in_length_range,
         num_proc=num_workers,
-        input_columns=["input_length"],
+        input_columns=["input_lengths"],
     )
 
     # TODO: filter data with targets longer than max_target_length
@@ -583,68 +625,45 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {cache}.")
         return
 
-    # Function to build a manifest from a HF dataset
+    # Function to build a NeMo tokenizer manifest from a HF dataset
     def build_manifest(ds, split, manifest_path):
         with open(manifest_path, 'w') as fout:
             for sample in tqdm(ds[split]):
                 # Write the metadata to the manifest
                 metadata = {
-                    "audio_filepath": sample[file_column_name],
-                    "duration": sample["input_length"],
                     "text": sample[text_column_name]
                 }
                 json.dump(metadata, fout)
                 fout.write('\n')
 
-    manifests = []
-
     if not os.path.exists(model_args.manifest_path):
         os.makedirs(model_args.manifest_path)
 
+    config.train_ds = config.validation_ds = config.test_ds = None
+
     if training_args.do_train:
         TRAIN_MANIFEST = os.path.join(model_args.manifest_path, "train.json")
-        if data_args.build_manifests:
-            logger.info(f"Building training manifest at {TRAIN_MANIFEST}")
-            build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
-        manifests.append(TRAIN_MANIFEST)
-        config.train_ds.manifest_filepath = TRAIN_MANIFEST
-        config.train_ds.max_duration = data_args.max_duration_in_seconds
-        config.train_ds.batch_size = training_args.per_device_train_batch_size
-    else:
-        config.train_ds = None
+        logger.info(f"Building training manifest at {TRAIN_MANIFEST}")
+        build_manifest(vectorized_datasets, "train", TRAIN_MANIFEST)
+        # Only use the train transcripts to build the tokenizer
+        manifest = TRAIN_MANIFEST
 
-    if training_args.do_eval:
-        VAL_MANIFEST = os.path.join(model_args.manifest_path, "validation.json")
-        if data_args.build_manifests:
-            logger.info(f"Building validation manifest at {VAL_MANIFEST}")
-            build_manifest(vectorized_datasets, "eval", VAL_MANIFEST)
-        # manifests.append(VAL_MANIFEST)
-        config.validation_ds.manifest_filepath = VAL_MANIFEST
-        config.validation_ds.batch_size = training_args.per_device_eval_batch_size
-    else:
-        config.validation_ds = None
+        tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifest)
 
-    if training_args.do_predict and data_args.build_manifests:
-        TEST_MANIFEST_PATH = []
-        for split in test_split:
-            test_manifest_path = os.path.join(model_args.manifest_path, f"{split}.json")
-            if data_args.build_manifests:
-                logger.info(f"Building test manifest at {test_manifest_path}")
-                build_manifest(vectorized_datasets, split, test_manifest_path)
-            # manifests.append(test_manifest_path)
-            TEST_MANIFEST_PATH.append(TEST_MANIFEST_PATH)
-        # TODO: handle multiple test sets
-        config.test_ds.manifest_filepath = ",".join(TEST_MANIFEST_PATH)
-        config.test_ds.batch_size = training_args.per_device_eval_batch_size
-    else:
-        config.test_ds = None
-
-    tokenizer_dir, tokenizer_type_cfg = build_tokenizer(model_args, data_args, manifests, from_scratch=data_args.build_tokenizer)
-
-    config.tokenizer.dir = tokenizer_dir
-    config.tokenizer.type = tokenizer_type_cfg
+        # generalise the script later to load a pre-built tokenizer for eval only
+        config.tokenizer.dir = tokenizer_dir
+        config.tokenizer.type = tokenizer_type_cfg
 
     model = RNNTBPEModel(cfg=config)
+
+    tokenizer = model.tokenizer.tokenizer.encode_as_ids
+
+    # now that we have our model and tokenizer defined, we can tokenize the text data
+    def tokenize_transcripts(batch):
+        batch["labels"] = tokenizer(batch[text_column_name])
+        return batch
+
+    vectorized_datasets = vectorized_datasets.map(tokenize_transcripts, num_proc=num_workers, desc="Tokenizing datasets...", remove_columns=next(iter(raw_datasets.values())).column_names)
 
     # bnb optimizer
     decay_parameters = get_parameter_names(model, [torch.nn.LayerNorm])
@@ -673,27 +692,17 @@ def main():
         wer = sum(wer_num) / sum(wer_denom)
         return {"wer": wer}
 
+    os.environ["WANDB_PROJECT"] = data_args.wandb_project
+
+
     class RNNTTrainer(Trainer):
-        def get_train_dataloader(self) -> DataLoader:
-            return self.model.train_dataloader()
-
-        def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
-            return self.model.val_dataloader()
-
-        def get_test_dataloader(self, test_dataset: Dataset) -> DataLoader:
-            return self.model.test_dataloader()
-
         def compute_loss(self, model, inputs, return_outputs=False):
             """
             How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
             Subclass and override for custom behavior.
             """
-            if isinstance(inputs, list):
-                inputs = {"inputs": inputs[0], "input_lengths": inputs[1], "labels": inputs[2],
-                          "label_lengths": inputs[3], "compute_wer": False}
 
-            # copied from...
             if self.label_smoother is not None and "labels" in inputs:
                 labels = inputs.pop("labels")
             else:
@@ -712,89 +721,7 @@ def main():
 
             return (loss, outputs) if return_outputs else loss
 
-        def prediction_step(
-                self,
-                model: nn.Module,
-                inputs: Dict[str, Union[torch.Tensor, Any]],
-                prediction_loss_only: bool,
-                ignore_keys: Optional[List[str]] = None,
-        ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
-            """
-            Perform an evaluation step on `model` using `inputs`.
 
-            Subclass and override to inject custom behavior.
-
-            Args:
-                model (`nn.Module`):
-                    The model to evaluate.
-                inputs (`Dict[str, Union[torch.Tensor, Any]]`):
-                    The inputs and targets of the model.
-
-                    The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
-                    argument `labels`. Check your model's documentation for all accepted arguments.
-                prediction_loss_only (`bool`):
-                    Whether or not to return the loss only.
-                ignore_keys (`Lst[str]`, *optional*):
-                    A list of keys in the output of your model (if it is a dictionary) that should be ignored when
-                    gathering predictions.
-
-            Return:
-                Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]: A tuple with the loss,
-                logits and labels (each being optional).
-            """
-            if isinstance(inputs, list):
-                inputs = {"inputs": inputs[0], "input_lengths": inputs[1], "labels": inputs[2],
-                          "label_lengths": inputs[3], "compute_wer": True}
-
-            # copied from...
-            has_labels = all(inputs.get(k) is not None for k in self.label_names)
-            inputs = self._prepare_inputs(inputs)
-            if ignore_keys is None:
-                if hasattr(self.model, "config"):
-                    ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
-                else:
-                    ignore_keys = []
-
-            # labels may be popped when computing the loss (label smoothing for instance) so we grab them first.
-            if has_labels:
-                labels = nested_detach(tuple(inputs.get(name) for name in self.label_names))
-                if len(labels) == 1:
-                    labels = labels[0]
-            else:
-                labels = None
-
-            with torch.no_grad():
-                if has_labels:
-                    with self.compute_loss_context_manager():
-                        loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                    loss = loss.mean().detach()
-
-                    if isinstance(outputs, dict):
-                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ["loss"])
-                    else:
-                        logits = outputs[1:]
-                else:
-                    loss = None
-                    with self.compute_loss_context_manager():
-                        outputs = model(**inputs)
-                    if isinstance(outputs, dict):
-                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys)
-                    else:
-                        logits = outputs
-                    # TODO: this needs to be fixed and made cleaner later.
-                    if self.args.past_index >= 0:
-                        self._past = outputs[self.args.past_index - 1]
-
-            if prediction_loss_only:
-                return (loss, None, None)
-
-            logits = nested_detach(logits)
-            if len(logits) == 1:
-                logits = logits[0]
-
-            return (loss, logits, labels)
-
-    os.environ["WANDB_PROJECT"] = data_args.wandb_project
 
     # Initialize Trainer
     trainer = RNNTTrainer(
@@ -802,6 +729,9 @@ def main():
         args=training_args,
         optimizers=optimizers,
         compute_metrics=compute_metrics,
+        train_dataset=vectorized_datasets['train'] if training_args.do_train else None,
+        eval_dataset=vectorized_datasets['eval'] if training_args.do_eval else None,
+        data_collator=NeMoDataCollator,
     )
 
     # 8. Finally, we can start training

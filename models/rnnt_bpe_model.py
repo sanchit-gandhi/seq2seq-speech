@@ -74,10 +74,10 @@ class RNNTBPEModel(EncDecRNNTBPEModel):
         encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
         return encoded, encoded_len
 
-    def forward(self, inputs, input_lengths=None, labels=None, label_lengths=None, compute_wer=False):
+    def forward(self, input_values, input_lengths=None, labels=None, label_lengths=None, compute_wer=False):
         # encoding() only performs encoder forward
-        encoded, encoded_len = self.encoding(input_signal=inputs, input_signal_length=input_lengths)
-        del inputs
+        encoded, encoded_len = self.encoding(input_signal=input_values, input_signal_length=input_lengths)
+        del input_values
 
         # During training, loss must be computed, so decoder forward is necessary
         decoder, target_length, states = self.decoder(targets=labels, target_length=label_lengths)
