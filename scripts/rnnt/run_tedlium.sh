@@ -11,7 +11,6 @@ CUDA_VISIBLE_DEVICES=0 python run_speech_recognition_rnnt.py \
         --eval_split_name="validation" \
         --test_split_name="test" \
         --text_column_name="text" \
-        --file_column_name="file" \
         --output_dir="./" \
         --run_name="rnnt-tedlium-baseline" \
         --wandb_project="rnnt" \

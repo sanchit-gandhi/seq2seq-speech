@@ -11,7 +11,6 @@ CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_rnnt.py \
         --eval_split_name="validation" \
         --test_split_name="validation" \
         --text_column_name="text" \
-        --file_column_name="file" \
         --output_dir="./" \
         --run_name="rnnt-ls-960h-baseline" \
         --wandb_project="librispeech_960h" \
@@ -23,6 +22,9 @@ CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_rnnt.py \
         --report_to="wandb" \
         --push_to_hub="False" \
         --preprocessing_num_workers="4" \
+        --group_by_length="True" \
+        --evaluation_strategy="steps" \
+        --eval_steps="80000" \
         --overwrite_output_dir \
         --fp16 \
         --do_lower_case \

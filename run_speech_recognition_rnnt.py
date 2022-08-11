@@ -17,7 +17,7 @@
 Fine-tuning the Flax library models for sequence to sequence speech recognition.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
-
+import copy
 import logging
 import math
 import os
@@ -191,10 +191,6 @@ class DataTrainingArguments:
         default="text",
         metadata={"help": "The name of the dataset column containing the text data. Defaults to 'text'"},
     )
-    file_column_name: str = field(
-        default="file",
-        metadata={"help": "The name of the dataset column containing the audio file path. Defaults to 'file'"},
-    )
     max_duration_in_seconds: float = field(
         default=20.0,
         metadata={
@@ -315,27 +311,27 @@ def NeMoDataCollator(features: List[Dict[str, Union[List[int], torch.Tensor]]]) 
     """
     # split inputs and labels since they have to be of different lengths
     # and need different padding methods
-    input_values = [feature["input_values"] for feature in features]
+    input_ids = [feature["input_ids"] for feature in features]
     labels = [feature["labels"] for feature in features]
 
     # first, pad the audio inputs to max_len
-    input_lengths = [len(inp_val) for inp_val in input_values]
+    input_lengths = [len(inp_val) for inp_val in input_ids]
     max_input_len = max(input_lengths)
-    input_values = [np.pad(input_val, (0, max_input_len - input_len), 'constant') for input_val, input_len in
-                    zip(input_values, input_lengths)]
+    input_ids = [np.pad(input_val, (0, max_input_len - input_len), 'constant') for input_val, input_len in
+                    zip(input_ids, input_lengths)]
 
     # next, pad the target labels to max_len
     label_lengths = [len(lab) for lab in labels]
     max_label_len = max(label_lengths)
     labels = [np.pad(lab, (0, max_label_len - lab_len), 'constant') for lab, lab_len in zip(labels, label_lengths)]
 
-    batch = {"input_values": input_values, "input_lengths": input_lengths, "labels": labels, "label_lengths": label_lengths}
+    batch = {"input_lengths": input_lengths, "labels": labels, "label_lengths": label_lengths}
 
     # return batch as a pt tensor (list -> np.array -> torch.tensor)
     batch = {k: torch.tensor(np.array(v), requires_grad=False) for k, v in batch.items()}
 
     # leave all ints as are, convert float64 to pt float
-    batch["input_values"] = batch["input_values"].float()
+    batch["input_ids"] = torch.tensor(np.array(input_ids, dtype=np.float32), requires_grad=False)
 
     return batch
 
@@ -447,13 +443,6 @@ def main():
             f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
         )
 
-    if data_args.file_column_name not in next(iter(raw_datasets.values())).column_names:
-        raise ValueError(
-            f"--file_column_name {data_args.file_column_name} not found in dataset '{data_args.dataset_name}'. "
-            "Make sure to set `--file_column_name` to the correct file column - one of "
-            f"{', '.join(next(iter(raw_datasets.values())).column_names)}."
-        )
-
     # 6. Resample speech dataset ALWAYS
     raw_datasets = raw_datasets.cast_column(
         data_args.audio_column_name, datasets.features.Audio(sampling_rate=config.sample_rate)
@@ -468,7 +457,6 @@ def main():
     audio_column_name = data_args.audio_column_name
     num_workers = data_args.preprocessing_num_workers
     text_column_name = data_args.text_column_name
-    file_column_name = data_args.file_column_name
     do_lower_case = data_args.do_lower_case
     dataset_name = data_args.dataset_name
     # Define tokens to ignore/replace
@@ -514,12 +502,12 @@ def main():
             # They will be filtered in the subsequent filtering stage and so are
             # explicitly ignored during training.
             # TODO: clean-up E22 dataset to remove these samples
-            sample = {"array": np.array([0.]), "sampling_rate": config.sampling_rate}
+            sample = {"array": np.array([0.]), "sampling_rate": config.sample_rate}
 
         # NeMo RNNT model performs the audio preprocessing in the `.forward()` call
         # => we only need to supply it with the raw audio values
-        batch["input_values"] = sample["array"]
-        batch["input_lengths"] = len(sample["array"]) / sample["sampling_rate"]
+        batch["input_ids"] = sample["array"]
+        batch["input_lengths"] = len(sample["array"])
 
         # Process targets. Note: this is quite lengthy as we perform any necessary processing
         # for each of the 8 datasets in the benchmark
@@ -690,44 +678,17 @@ def main():
     optimizers = (optimizer, None)
 
     def compute_metrics(pred):
+        # Tuple of WERs returned by the model during eval: (wer, wer_num, wer_denom)
         wer_num = pred.predictions[1]
         wer_denom = pred.predictions[2]
+        # compute WERs over concat batches
         wer = sum(wer_num) / sum(wer_denom)
         return {"wer": wer}
 
     os.environ["WANDB_PROJECT"] = data_args.wandb_project
 
-
-    class RNNTTrainer(Trainer):
-        def compute_loss(self, model, inputs, return_outputs=False):
-            """
-            How the loss is computed by Trainer. By default, all models return the loss in the first element.
-
-            Subclass and override for custom behavior.
-            """
-
-            if self.label_smoother is not None and "labels" in inputs:
-                labels = inputs.pop("labels")
-            else:
-                labels = None
-            outputs = model(**inputs)
-            # Save past state if it exists
-            # TODO: this needs to be fixed and made cleaner later.
-            if self.args.past_index >= 0:
-                self._past = outputs[self.args.past_index]
-
-            if labels is not None:
-                loss = self.label_smoother(outputs, labels)
-            else:
-                # We don't use .loss here since the model may return tuples instead of ModelOutput.
-                loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-
-            return (loss, outputs) if return_outputs else loss
-
-
-
     # Initialize Trainer
-    trainer = RNNTTrainer(
+    trainer = Trainer(
         model=model,
         args=training_args,
         optimizers=optimizers,
@@ -768,7 +729,12 @@ def main():
     # Evaluation
     results = {}
     if training_args.do_eval:
-        logger.info("*** Evaluate ***")
+        logger.info("*** Running Final Evaluation (beam search) ***")
+        beam_decoding_config = copy.deepcopy(config.decoding)
+        beam_decoding_config.strategy = "beam"  # Options are `greedy`, `greedy_batch`, `beam`, `tsd` and `alsd`
+        beam_decoding_config.beam.beam_size = 4  # Increase beam size for better scores, but it will take much longer for transcription !
+
+        trainer.model.change_decoding_strategy(beam_decoding_config)
         metrics = trainer.evaluate()
         max_eval_samples = (
             data_args.max_eval_samples if data_args.max_eval_samples is not None else len(vectorized_datasets["eval"])

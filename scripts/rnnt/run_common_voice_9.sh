@@ -11,7 +11,6 @@ CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_rnnt.py \
         --eval_split_name="validation" \
         --test_split_name="test" \
         --text_column_name="sentence" \
-        --file_column_name="path" \
         --output_dir="./" \
         --run_name="rnnt-cv9-baseline" \
         --wandb_project="common_voice_9_0" \

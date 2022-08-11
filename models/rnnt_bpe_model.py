@@ -74,10 +74,10 @@ class RNNTBPEModel(EncDecRNNTBPEModel):
         encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
         return encoded, encoded_len
 
-    def forward(self, input_values, input_lengths=None, labels=None, label_lengths=None, compute_wer=False):
+    def forward(self, input_ids, input_lengths=None, labels=None, label_lengths=None):
         # encoding() only performs encoder forward
-        encoded, encoded_len = self.encoding(input_signal=input_values, input_signal_length=input_lengths)
-        del input_values
+        encoded, encoded_len = self.encoding(input_signal=input_ids, input_signal_length=input_lengths)
+        del input_ids
 
         # During training, loss must be computed, so decoder forward is necessary
         decoder, target_length, states = self.decoder(targets=labels, target_length=label_lengths)
@@ -92,7 +92,7 @@ class RNNTBPEModel(EncDecRNNTBPEModel):
             # Add auxiliary losses, if registered
             loss_value = self.add_auxiliary_losses(loss_value)
             wer = wer_num = wer_denom = None
-            if compute_wer:
+            if not self.training:
                 self.wer.update(encoded, encoded_len, labels, target_length)
                 wer, wer_num, wer_denom = self.wer.compute()
                 self.wer.reset()
@@ -106,7 +106,7 @@ class RNNTBPEModel(EncDecRNNTBPEModel):
                 encoder_lengths=encoded_len,
                 transcripts=labels,
                 transcript_lengths=label_lengths,
-                compute_wer=compute_wer,
+                compute_wer=not self.training,
             )
             # Add auxiliary losses, if registered
             loss_value = self.add_auxiliary_losses(loss_value)
