@@ -332,7 +332,10 @@ def NeMoDataCollator(features: List[Dict[str, Union[List[int], torch.Tensor]]]) 
     batch = {"input_values": input_values, "input_lengths": input_lengths, "labels": labels, "label_lengths": label_lengths}
 
     # return batch as a pt tensor (list -> np.array -> torch.tensor)
-    batch = {k: torch.tensor(np.array(v), requires_grad=False).float() for k, v in batch.items()}
+    batch = {k: torch.tensor(np.array(v), requires_grad=False) for k, v in batch.items()}
+
+    # leave all ints as are, convert float64 to pt float
+    batch["input_values"] = batch["input_values"].float()
 
     return batch
 
