@@ -1511,7 +1511,7 @@ def main():
 
                 # generation
                 if training_args.predict_with_generate:
-                    generated_ids = pad_shard_unpad(p_final_generate_step)(state.params, batch.data, min_device_batch_size=per_device_eval_batch_size)
+                    generated_ids = pad_shard_unpad(p_final_generate_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
                     pred_generations.extend(
                         jax.device_get(
                             generated_ids.reshape(-1, final_gen_kwargs["num_beams"], final_gen_kwargs["max_length"])
