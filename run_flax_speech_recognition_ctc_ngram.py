@@ -929,11 +929,12 @@ def main():
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
-                    "[vocalized-noise]", "_1"]
+                        "[vocalized-noise]", "_1"]
     swb_punctuations = ["{", "}", "[", "]-", "]"]
     earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>",
+                       "<sil>", ""]
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -946,7 +947,6 @@ def main():
             raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
 
     if training_args.do_train and data_args.remove_punctuation:
-
         def remove_punctuation(batch):
             batch[text_column_name] = (
                 re.sub(chars_to_ignore_regex, "", batch[text_column_name]).replace("'", "").replace('"', "")
@@ -1109,7 +1109,8 @@ def main():
         return {"wer": wer, "cer": cer}, pred_str, label_str
 
     # 9. Define processor with LM, and (maybe) save with the config
-    # TODO: load processor from pre-trained (in which case we couple the tokenizer and decoder together). Or define separately from feature_extractor, tokenizer and decoder as follows:
+    # TODO: load processor from pre-trained (in which case we couple the tokenizer and decoder together).
+    #  Or define separately from feature_extractor, tokenizer and decoder as follows:
     processor = Wav2Vec2ProcessorWithLM(
         feature_extractor=feature_extractor,
         tokenizer=tokenizer,
