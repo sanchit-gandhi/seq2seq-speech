@@ -891,8 +891,7 @@ def main():
     model_input_name = feature_extractor.model_input_names[0]
     do_lower_case = data_args.do_lower_case
     dataset_name = data_args.dataset_name
-    chars_to_ignore = ', ? . ! - ; : " “ % ‘ ” ?'.split(" ")
-    chars_to_ignore_regex = f'[{"".join(chars_to_ignore)}]'
+    tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
@@ -912,19 +911,6 @@ def main():
         for split in test_split:
             raw_datasets[split] = raw_datasets[split].select(range(data_args.max_eval_samples))
 
-    if training_args.do_train and data_args.remove_punctuation:
-
-        def remove_punctuation(batch):
-            batch[text_column_name] = (
-                re.sub(chars_to_ignore_regex, "", batch[text_column_name]).replace("'", "").replace('"', "")
-            )
-
-        raw_datasets["train"] = raw_datasets["train"].map(
-            remove_punctuation,
-            num_proc=data_args.preprocessing_num_workers,
-            desc="removing punctuation from train split",
-        )
-
     # filter data where the targets are ignored in scoring
     def is_target_labels(input_str):
         return input_str.lower() not in ignore_segments
@@ -937,75 +923,81 @@ def main():
         )
 
     def prepare_dataset(batch):
-        # process audio
+        # pre-process audio
         try:
             sample = batch[audio_column_name]
         except ValueError:
+            # E22: some samples are empty (no audio). Reading the empty audio array will trigger
+            # a soundfile ValueError. For now, we'll manually set these arrays to a zero array.
+            # They will be filtered in the subsequent filtering stage and so are
+            # explicitly ignored during training.
             sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
+
+        # normalise audio (mean, std) to (0, 1)
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
         batch["input_length"] = len(batch["input_values"])
 
-        # process targets
+        # 'error correction' of targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
 
+        # LibriSpeech ASR
+        if dataset_name == "librispeech_asr":
+            pass  # no error correction necessary
+
+        # VoxPopuli
         if dataset_name == "google/xtreme_s":
-            # Finally, we tokenize the processed text
-            batch["labels"] = tokenizer(input_str).input_ids
-            batch["labels_length"] = len(batch["labels"])
-            return batch
+            pass  # no error correction necessary
 
         # Common Voice 9
-        if input_str.startswith('"') and input_str.endswith('"'):
-            # we can remove trailing quotation marks as they do not affect the transcription
-            input_str = input_str[1:-1]
-        # normalize quotation marks
-        input_str = re.sub(r'["“”]', '"', input_str)
-        # normalize apostrophes
-        input_str = re.sub(r"[’']", "'", input_str)
-        # normalize hyphens
-        input_str = re.sub(r"[—–]", "-", input_str)
-        # replace double quotation marks with single
-        input_str = input_str.replace('""', '"')
-        if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
-            # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+        if dataset_name == "mozilla-foundation/common_voice_9_0":
+            if input_str.startswith('"') and input_str.endswith('"'):
+                # we can remove trailing quotation marks as they do not affect the transcription
+                input_str = input_str[1:-1]
+            # replace double quotation marks with single
+            input_str = input_str.replace('""', '"')
 
-        # TEDLIUM-3
-        # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
-        input_str = input_str.replace("<unk>", "").replace(" '", "'")
+        # TED-LIUM (Release 3)
+        if dataset_name == "LIUM/tedlium":
+            # delete the <unk> token from the text
+            input_str = input_str.replace("<unk>", "")
+            # replace spaced apostrophes with un-spaced (it 's -> it's)
+            for contraction in tedlium_contractions:
+                input_str = input_str.replace(contraction, contraction[1:])
 
         # GigaSpeech
-        for disfluency in gigaspeech_disfluencies:
-            input_str = input_str.replace(disfluency, "")
-        # convert spelled out punctuation to symbolic form
-        for punctuation, replacement in gigaspeech_punctuation.items():
-            input_str = input_str.replace(punctuation, replacement)
-        if dataset_name == "speechcolab/gigaspeech" and len(input_str):
-            # for GS, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+        if dataset_name == "speechcolab/gigaspeech":
+            for disfluency in gigaspeech_disfluencies:
+                input_str = input_str.replace(disfluency, "")
+            # convert spelled out punctuation to symbolic form
+            for punctuation, replacement in gigaspeech_punctuation.items():
+                input_str = input_str.replace(punctuation, replacement)
+            if dataset_name == "speechcolab/gigaspeech" and len(input_str):
+                # for GS, we'll normalize the text to always finish with punctuation
+                if input_str[-1] not in [".", "?", "!"]:
+                    input_str = input_str + "."
 
-        # SWB
-        for disfluency in swb_disfluencies:
-            input_str = input_str.replace(disfluency, "")
-        # remove parenthesised text (test data only)
-        input_str = re.sub("[\(].*?[\)]", "", input_str)
-        for punctuation in swb_punctuations:
-            input_str = input_str.replace(punctuation, "")
-        # replace anomalous words with their correct transcriptions
-        split_str = input_str.split("/")
-        if len(split_str) > 1:
-            input_str = " ".join(
-                [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+        # SWB: hide the path to the private HF dataset
+        if "switchboard" in dataset_name:
+            for disfluency in swb_disfluencies:
+                input_str = input_str.replace(disfluency, "")
+            # remove parenthesised text (test data only)
+            input_str = re.sub("[\(].*?[\)]", "", input_str)
+            for punctuation in swb_punctuations:
+                input_str = input_str.replace(punctuation, "")
+            # replace anomalous words with their correct transcriptions
+            split_str = input_str.split("/")
+            if len(split_str) > 1:
+                input_str = " ".join(
+                    [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
 
-        # Earnings 22
-        for disfluency in earnings_disfluencies:
-            input_str = input_str.replace(disfluency, "")
-        # replace mal-formatted ellipsis
-        input_str = input_str.replace("…", ".")
+        # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
+        if "earnings22" in dataset_name:
+            for disfluency in earnings_disfluencies:
+                input_str = input_str.replace(disfluency, "")
+            # mal-formatted ellipsis used to denote an incomplete sentence, replace with ellipsis: … -> ...
+            input_str = input_str.replace("…", " . . . ")
 
         # JIWER compliance
         # remove multiple spaces
