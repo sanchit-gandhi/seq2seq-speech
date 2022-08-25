@@ -973,10 +973,6 @@ def main():
             # convert spelled out punctuation to symbolic form
             for punctuation, replacement in gigaspeech_punctuation.items():
                 input_str = input_str.replace(punctuation, replacement)
-            if dataset_name == "speechcolab/gigaspeech" and len(input_str):
-                # for GS, we'll normalize the text to always finish with punctuation
-                if input_str[-1] not in [".", "?", "!"]:
-                    input_str = input_str + "."
 
         # SWB: hide the path to the private HF dataset
         if "switchboard" in dataset_name:
