@@ -933,17 +933,19 @@ def main():
             return batch
 
         # Common Voice 9
+        # TODO: MAKE SURE THAT EVERYTHING IS IN IF STATEMENT
         if input_str.startswith('"') and input_str.endswith('"'):
             # we can remove trailing quotation marks as they do not affect the transcription
             input_str = input_str[1:-1]
         # normalize quotation marks
-        input_str = re.sub(r'["“”]', '"', input_str)
+        # input_str = re.sub(r'["“”]', '"', input_str)
         # normalize apostrophes
-        input_str = re.sub(r"[’']", "'", input_str)
+        # input_str = re.sub(r"[’']", "'", input_str)
         # normalize hyphens
-        input_str = re.sub(r"[—–]", "-", input_str)
-        # replace double quotation marks with single
+        # input_str = re.sub(r"[—–]", "-", input_str)
+        # Error correction: replace double quotation marks with single
         input_str = input_str.replace('""', '"')
+        # TODO(Check stats!!!) Whether it's worth it / fair
         if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
             # for CV9, we'll normalize the text to always finish with punctuation
             if input_str[-1] not in [".", "?", "!"]:
@@ -951,7 +953,9 @@ def main():
 
         # TEDLIUM-3
         # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
-        input_str = input_str.replace("<unk>", "").replace(" '", "'")
+        # input_str = input_str.replace("<unk>", "").replace(" '", "'")
+        # TODO(Check that we don't break information, such as "here is a boat 'boaty' that floats on the ocean")
+        input_str = input_str.replace("<unk>", "")
 
         # GigaSpeech
         for disfluency in gigaspeech_disfluencies:
@@ -959,6 +963,7 @@ def main():
         # convert spelled out punctuation to symbolic form
         for punctuation, replacement in gigaspeech_punctuation.items():
             input_str = input_str.replace(punctuation, replacement)
+        # TODO(Check stats!!!) Whether it's worth it / fair
         if dataset_name == "speechcolab/gigaspeech" and len(input_str):
             # for GS, we'll normalize the text to always finish with punctuation
             if input_str[-1] not in [".", "?", "!"]:
@@ -968,10 +973,12 @@ def main():
         for disfluency in swb_disfluencies:
             input_str = input_str.replace(disfluency, "")
         # remove parenthesised text (test data only)
+        # Add if statement for SWB
         input_str = re.sub("[\(].*?[\)]", "", input_str)
         for punctuation in swb_punctuations:
             input_str = input_str.replace(punctuation, "")
         # replace anomalous words with their correct transcriptions
+        # Error correction so add IF statements
         split_str = input_str.split("/")
         if len(split_str) > 1:
             input_str = " ".join(
@@ -981,6 +988,7 @@ def main():
         for disfluency in earnings_disfluencies:
             input_str = input_str.replace(disfluency, "")
         # replace mal-formatted ellipsis
+        # TODO(CHECK) and make error correct (so if statement) and replace to three dots "..."
         input_str = input_str.replace("…", ".")
 
         # JIWER compliance
