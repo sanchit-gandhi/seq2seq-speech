@@ -8,27 +8,25 @@ import tempfile
 from transformers import Wav2Vec2CTCTokenizer
 
 # which dataset
-dataset_name = "kensho/spgispeech"
+dataset_name = "ldc/switchboard"
 # which config
-dataset_config = "S"
+dataset_config = "switchboard"
 # which split => @Sanchit, we should only use the train split for "fairness"
 split = "train"
 # in case the dataset requires access like CV9
 use_auth_token = True
 # name of the text data column
-text_column = "transcript"
+text_column = "text"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_spgispeech_tokenizer"
+tokenizer_name = "wav2vec2_ctc_swb_tokenizer"
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # For GigaSpeech, we need to convert spelled out punctuation to symbolic form
 gigaspeech_punctuation = {"<comma>": ",", "<period>": ".", "<questionmark>": "?", "<exclamationpoint": "!"}
-# chars to remove - these get filtered out in our data preprocessing script during training
-preprocessing_chars_to_remove = ['{', '}', '(', ')', '<', '>', '_1', '[', ']']
+# chars to remove - these junk tokens get filtered out in our data preprocessing script during training
+preprocessing_chars_to_remove = ['{', '}', '<', '>', '_', '[', ']']
 # additional chars to remove if `remove_punctuation` is set to True
 additional_chars_to_remove_regex = '[,?.!-;:"“%‘”�{}()<>' + "']"
-SAMPLE_RATE = 16_000
-MAX_LENGTH_IN_SECONDS = 20.0
 
 dataset = load_dataset(
     dataset_name,
@@ -114,15 +112,15 @@ def create_vocabulary_from_data(dataset, word_delimiter_token="|", do_lower=Fals
     return vocab_dict
 
 # Note that the functions accepts the following important args
-# 1. --do_lower 
+# 1. --do_lower
 # => whether to lowercase all letters or not.
-# Note that if you lowercase letters for the vocab, then you also need to 
+# Note that if you lowercase letters for the vocab, then you also need to
 # do so when preparing the data for the training, dev and test set
 # 2. --cutoff_freq
 # => This is very important! Lots of datasets will contain "wrong" characters in the training set, e.g.
 # characters that just occur a couple of times.
-# By default, the CTC vocab creation would just add them to the vocab even if their occurance is neglectible # compared to the "super frequent" letters. We can see such characters as "errors" or irrelevant in the 
-# dataset, so that we should delete them from the vocab. During training they would then just be classified 
+# By default, the CTC vocab creation would just add them to the vocab even if their occurance is neglectible # compared to the "super frequent" letters. We can see such characters as "errors" or irrelevant in the
+# dataset, so that we should delete them from the vocab. During training they would then just be classified
 # unkown <unk> tokens which the model can handle.
 # In this script, we deploy a mechanism to remove all chars whose freq in % is below a certain threshold.
 
@@ -281,7 +279,7 @@ Total characters in dataset: 57415071
 """
 
 # Cool, now let's remove very rare, "wrong" characters. Everything belowe 0.01% (note that's 1/10,000) seems like a good estimate
-# It keeps all letters of the alphabet and some punctuation, but removes clearly all incorrect letters like 
+# It keeps all letters of the alphabet and some punctuation, but removes clearly all incorrect letters like
 # accentuated letters from German or French, Chinese letters, ...
 # Running it once more and now keeping the dict
 do_lower = True
