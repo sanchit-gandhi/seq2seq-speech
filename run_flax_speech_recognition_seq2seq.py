@@ -913,7 +913,7 @@ def main():
         )
 
     def prepare_dataset(batch):
-        # pre-process audio
+        # Pre-process audio
         try:
             sample = batch[audio_column_name]
         except ValueError:
@@ -930,7 +930,7 @@ def main():
         batch["input_length"] = len(batch["input_values"])
         batch["input_id"] = batch[id_column_name] if log_first_ids else None
 
-        # 'error correction' of targets
+        # 'Error correction' of targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
 
         # LibriSpeech ASR
@@ -983,10 +983,12 @@ def main():
         if "earnings22" in dataset_name:
             for disfluency in earnings_disfluencies:
                 input_str = input_str.replace(disfluency, "")
-            # mal-formatted ellipsis used to denote an incomplete sentence, replace with ellipsis: … -> ...
-            input_str = input_str.replace("…", " . . . ")
 
-        # JIWER compliance
+        # SPGISpeech
+        if dataset_name == "kensho/spgispeech":
+            pass  # no error correction necessary
+
+        # JIWER compliance (for WER/CER calc.)
         # remove multiple spaces
         input_str = re.sub(r"\s\s+", " ", input_str)
         # strip trailing spaces
