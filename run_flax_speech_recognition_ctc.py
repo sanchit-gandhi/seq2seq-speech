@@ -568,19 +568,30 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, step, num_log=50, prefix="eval"):
+def write_wandb_pred(pred_str, label_str, step, final_step=False, prefix="eval"):
     if jax.process_index() == 0:
         # convert str data to a wandb compatible format
         str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
-        # we'll log the first 50 predictions for each epoch
-        wandb.log(
-            {
-                f"{prefix}/step_{int(step / 1000)}k": wandb.Table(
-                    columns=["label_str", "pred_str"], data=str_data[:num_log]
-                )
-            },
-            step,
-        )
+        if not final_step:
+            # we'll log the first 50 predictions for each intermediate epoch
+            wandb.log(
+                {
+                    f"{prefix}/step_{int(step / 1000)}k": wandb.Table(
+                        columns=["label_str", "pred_str"], data=str_data[:50]
+                    )
+                },
+                step,
+            )
+        else:
+            # we'll log all predictions for the last epoch
+            wandb.log(
+                {
+                    f"{prefix}/step_{int(step / 1000)}k_all": wandb.Table(
+                        columns=["label_str", "pred_str"], data=str_data
+                    )
+                },
+                step,
+            )
 
 
 def create_learning_rate_fn(
@@ -1330,7 +1341,7 @@ def main():
     if training_args.do_eval:
         p_eval_step = jax.pmap(eval_step, "batch")
 
-    def run_evaluation(step):
+    def run_evaluation(step, final_step=False):
         if training_args.do_eval:
             # ======================== Evaluating ==============================
             eval_metrics = []
@@ -1372,7 +1383,7 @@ def main():
 
             # Save metrics
             write_wandb_log(eval_metrics, step, prefix="eval")
-            write_wandb_pred(pred_str, label_str, step)
+            write_wandb_pred(pred_str, label_str, step, final_step=final_step)
             # if has_tensorboard and jax.process_index() == 0:
             # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
 
@@ -1440,14 +1451,14 @@ def main():
                     break
 
                 if training_args.eval_steps and cur_step % training_args.eval_steps == 0:
-                    run_evaluation(cur_step)
+                    run_evaluation(cur_step, final_step=False)
 
                 if cur_step % training_args.save_steps == 0:
                     save_checkpoint(cur_step)
 
             if training_args.eval_steps == 0 and (epoch + 1) != num_epochs:
                 # run evaluation at the end of the epoch if eval steps are not specified
-                run_evaluation(cur_step)
+                run_evaluation(cur_step, final_step=False)
                 save_checkpoint(cur_step)
 
     if training_args.do_train:
@@ -1456,7 +1467,7 @@ def main():
     cur_step = max_steps if max_steps > 0 else cur_step  # set step to max steps so that eval happens in alignment with training
 
     if training_args.do_eval:
-        run_evaluation(cur_step)
+        run_evaluation(cur_step, final_step=True)
 
     # TODO: collapse 'do_predict' into the run_evaluation function
     if training_args.do_predict:
@@ -1498,7 +1509,7 @@ def main():
 
             # Save metrics
             write_wandb_log(eval_metrics, cur_step, prefix=split)
-            write_wandb_pred(pred_str, label_str, cur_step, prefix=split)
+            write_wandb_pred(pred_str, label_str, cur_step, final_step=True, prefix=split)
             # if has_tensorboard and jax.process_index() == 0:
             # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
