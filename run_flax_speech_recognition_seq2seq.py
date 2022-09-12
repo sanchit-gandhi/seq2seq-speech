@@ -1029,11 +1029,20 @@ def main():
         def is_eval_audio_in_length_range(length):
             return min_input_length < length < max_eval_input_length
 
-        vectorized_datasets = vectorized_datasets.filter(
-            is_eval_audio_in_length_range,
-            num_proc=num_workers,
-            input_columns=["input_length"],
-        )
+        if training_args.do_eval:
+            vectorized_datasets["eval"] = vectorized_datasets["eval"].filter(
+                is_eval_audio_in_length_range,
+                num_proc=num_workers,
+                input_columns=["input_length"],
+            )
+
+        if training_args.do_test:
+            for split in test_split:
+                vectorized_datasets[split] = vectorized_datasets[split].filter(
+                    is_eval_audio_in_length_range,
+                    num_proc=num_workers,
+                    input_columns=["input_length"],
+                )
 
     # filter data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(length):
