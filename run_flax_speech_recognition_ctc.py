@@ -1024,7 +1024,7 @@ def main():
 
     # filter training data with inputs longer than max_input_length
     def is_audio_in_length_range(length):
-        return length > min_input_length and length < max_input_length
+        return min_input_length < length < max_input_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
@@ -1035,7 +1035,7 @@ def main():
 
     # filter data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(length):
-        return length > min_target_length and length < max_target_length
+        return min_target_length < length < max_target_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
@@ -1059,11 +1059,20 @@ def main():
         def is_eval_audio_in_length_range(length):
             return min_input_length < length < max_eval_input_length
 
-        vectorized_datasets = vectorized_datasets.filter(
-            is_eval_audio_in_length_range,
-            num_proc=num_workers,
-            input_columns=["input_length"],
-        )
+        if training_args.do_eval:
+            vectorized_datasets["eval"] = vectorized_datasets["eval"].filter(
+                is_eval_audio_in_length_range,
+                num_proc=num_workers,
+                input_columns=["input_length"],
+            )
+
+        if training_args.do_test:
+            for split in test_split:
+                vectorized_datasets[split] = vectorized_datasets[split].filter(
+                    is_eval_audio_in_length_range,
+                    num_proc=num_workers,
+                    input_columns=["input_length"],
+                )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
