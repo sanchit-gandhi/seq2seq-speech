@@ -210,6 +210,12 @@ class DataTrainingArguments:
             "than this will be filtered."
         },
     )
+    max_eval_duration_in_seconds: float = field(
+        default=None,
+        metadata={
+            "help": "Filter audio files in the eval/test set that are longer than `max_duration_in_seconds` seconds"
+        },
+    )
     pad_input_to_multiple_of: Optional[int] = field(
         default=32000,
         metadata={
@@ -882,6 +888,7 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
+    max_eval_input_length = int(data_args.max_eval_duration_in_seconds * feature_extractor.sampling_rate) if data_args.max_eval_duration_in_seconds else None
     max_target_length = data_args.max_label_length
     min_target_length = data_args.min_label_length
     pad_input_to_multiple_of = data_args.pad_input_to_multiple_of
@@ -1046,6 +1053,17 @@ def main():
         num_proc=num_workers,
         input_columns=["labels_length"],
     )
+
+    if max_eval_input_length is not None:
+        # filter training data with inputs longer than max_input_length
+        def is_eval_audio_in_length_range(length):
+            return min_input_length < length < max_eval_input_length
+
+        vectorized_datasets = vectorized_datasets.filter(
+            is_eval_audio_in_length_range,
+            num_proc=num_workers,
+            input_columns=["input_length"],
+        )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -1319,7 +1337,10 @@ def main():
                 batch = data_collator(samples)
                 labels = batch["labels"]
 
-                metrics, pred_ids = pad_shard_unpad(p_eval_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
+                try:
+                    metrics, pred_ids = pad_shard_unpad(p_eval_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
+                except TypeError:
+                    continue
                 eval_preds.extend(jax.device_get(pred_ids.reshape(-1, pred_ids.shape[-1])))
                 eval_metrics.append(metrics)
 

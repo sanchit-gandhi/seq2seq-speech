@@ -205,6 +205,12 @@ class DataTrainingArguments:
     min_duration_in_seconds: float = field(
         default=0.0, metadata={"help": "Filter audio files in the training set that are shorter than `min_duration_in_seconds` seconds"}
     )
+    max_eval_duration_in_seconds: float = field(
+        default=None,
+        metadata={
+            "help": "Filter audio files in the eval/test set that are longer than `max_duration_in_seconds` seconds"
+        },
+    )
     max_target_length: Optional[int] = field(
         default=128,
         metadata={
@@ -869,6 +875,7 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
+    max_eval_input_length = int(data_args.max_eval_duration_in_seconds * feature_extractor.sampling_rate) if data_args.max_eval_duration_in_seconds else None
     max_target_length = data_args.max_target_length
     min_target_length = data_args.min_target_length
     pad_input_to_multiple_of = data_args.pad_input_to_multiple_of
@@ -1008,7 +1015,7 @@ def main():
 
     # filter training data with inputs longer than max_input_length
     def is_audio_in_length_range(length):
-        return length > min_input_length and length < max_input_length
+        return min_input_length < length < max_input_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
@@ -1017,9 +1024,20 @@ def main():
             input_columns=["input_length"],
         )
 
+    if max_eval_input_length is not None:
+        # filter training data with inputs longer than max_input_length
+        def is_eval_audio_in_length_range(length):
+            return min_input_length < length < max_eval_input_length
+
+        vectorized_datasets = vectorized_datasets.filter(
+            is_eval_audio_in_length_range,
+            num_proc=num_workers,
+            input_columns=["input_length"],
+        )
+
     # filter data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(length):
-        return length > min_target_length and length < max_target_length
+        return min_target_length < length < max_target_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
