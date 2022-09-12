@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 python run_flax_speech_recognition_ctc.py \
         --model_name_or_path="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
-        --tokenizer_name="sanchit-gandhi/wav2vec2-ctc-spgispeech-tokenizer" \
-        --dataset_name="kensho/spgispeech" \
-        --dataset_config_name="L" \
+        --tokenizer_name="patrickvonplaten/wav2vec2_ctc_ami_tokenizer" \
+        --dataset_name="speech-seq2seq/ami" \
+        --dataset_config_name="ihm" \
         --train_split_name="train" \
         --eval_split_name="validation" \
         --test_split_name="test" \
-        --text_column_name="transcript" \
-        --output_dir="./flax-wav2vec2-ctc-spgispeech-baseline" \
-        --wandb_project="spgispeech" \
-        --wandb_name="flax-wav2vec2-ctc-spgispeech-baseline" \
+        --text_column_name="text" \
+        --output_dir="./flax-wav2vec2-ctc-ami-black-box" \
+        --wandb_project="ami" \
+        --wandb_name="flax-wav2vec2-ctc-ami-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --max_steps="50000" \
         --save_steps="10000" \
@@ -19,6 +19,9 @@ python run_flax_speech_recognition_ctc.py \
         --logging_steps="25" \
         --warmup_steps="5000" \
         --preprocessing_num_workers="1" \
+        --hidden_dropout="0.2" \
+        --activation_dropout="0.2" \
+        --feat_proj_dropout="0.2" \
         --do_lower_case="False" \
         --do_train \
         --do_eval \

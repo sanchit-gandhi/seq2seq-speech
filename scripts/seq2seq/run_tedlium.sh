@@ -8,23 +8,24 @@ python run_flax_speech_recognition_seq2seq.py \
         --test_split_name="test" \
         --text_column_name="text" \
         --id_column_name="id" \
-        --output_dir="./flax-wav2vec2-2-bart-large-tedlium-baseline" \
+        --output_dir="./" \
         --wandb_project="tedlium" \
-        --wandb_name="flax-wav2vec2-2-bart-large-tedlium-baseline" \
+        --wandb_name="flax-wav2vec2-2-bart-large-tedlium-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
-        --per_device_eval_batch_size="4" \
+        --per_device_eval_batch_size="2" \
+        --learning_rate="1e-4" \
+        --warmup_steps="500" \
         --logging_steps="25" \
         --max_steps="50000" \
         --eval_steps="10000" \
         --save_steps="10000" \
-        --generation_max_length="40" \
-        --generation_num_beams="1" \
+        --generation_max_length="200" \
+        --generation_num_beams="5" \
         --generation_length_penalty="1.2" \
-        --final_generation_max_length="200" \
-        --final_generation_num_beams="5" \
-        --learning_rate="1e-4" \
-        --warmup_steps="500" \
+        --hidden_dropout="0.2" \
+        --activation_dropout="0.2" \
+        --feat_proj_dropout="0.2" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \

@@ -25,11 +25,11 @@ python run_flax_speech_recognition_seq2seq.py \
         --final_generation_num_beams="5" \
         --learning_rate="1e-4" \
         --warmup_steps="500" \
+        --do_lower_case="False" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \
         --predict_with_generate \
-        --do_lower_case \
         --do_eval \
         --do_train \
         --do_predict \

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 python run_flax_speech_recognition_seq2seq.py \
-        --dataset_name="librispeech_asr" \
+        --dataset_name="ldc/switchboard" \
         --model_name_or_path="sanchit-gandhi/flax-wav2vec2-2-bart-large-scan" \
-        --dataset_config_name="all" \
-        --train_split_name="train.clean.100+train.clean.360+train.other.500" \
-        --eval_split_name="validation.clean" \
-        --test_split_name="validation.other+test.clean+test.other" \
+        --dataset_config_name="switchboard" \
+        --train_split_name="train" \
+        --eval_split_name="validation" \
+        --test_split_name="test.switchboard+test.callhome" \
         --text_column_name="text" \
         --id_column_name="id" \
-        --output_dir="./" \
-        --wandb_project="librispeech_960h" \
-        --wandb_name="flax-wav2vec2-2-bart-large-ls-960h-black-box" \
+        --output_dir="./flax-wav2vec2-2-bart-large-switchboard-black-box" \
+        --wandb_project="switchboard" \
+        --wandb_name="flax-wav2vec2-2-bart-large-switchboard-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="2" \
@@ -30,7 +30,6 @@ python run_flax_speech_recognition_seq2seq.py \
         --gradient_checkpointing \
         --freeze_feature_encoder \
         --predict_with_generate \
-        --do_lower_case \
         --do_eval \
         --do_train \
         --do_predict \

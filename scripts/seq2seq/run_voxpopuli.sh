@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 python run_flax_speech_recognition_seq2seq.py \
-        --dataset_name="librispeech_asr" \
+        --dataset_name="google/xtreme_s" \
         --model_name_or_path="sanchit-gandhi/flax-wav2vec2-2-bart-large-scan" \
-        --dataset_config_name="all" \
-        --train_split_name="train.clean.100+train.clean.360+train.other.500" \
-        --eval_split_name="validation.clean" \
-        --test_split_name="validation.other+test.clean+test.other" \
-        --text_column_name="text" \
+        --dataset_config_name="voxpopuli.en" \
+        --train_split_name="train" \
+        --eval_split_name="validation" \
+        --test_split_name="test" \
+        --text_column_name="sentence" \
         --id_column_name="id" \
-        --output_dir="./" \
-        --wandb_project="librispeech_960h" \
-        --wandb_name="flax-wav2vec2-2-bart-large-ls-960h-black-box" \
+        --output_dir="./flax-wav2vec2-2-bart-large-voxpopuli-black-box" \
+        --wandb_project="voxpopuli" \
+        --wandb_name="flax-wav2vec2-2-bart-large-voxpopuli-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
-        --per_device_eval_batch_size="2" \
+        --per_device_eval_batch_size="1" \
         --learning_rate="1e-4" \
         --warmup_steps="500" \
         --logging_steps="25" \
