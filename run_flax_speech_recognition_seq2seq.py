@@ -199,11 +199,17 @@ class DataTrainingArguments:
     max_duration_in_seconds: float = field(
         default=20.0,
         metadata={
-            "help": "Truncate audio files that are longer than `max_duration_in_seconds` seconds to 'max_duration_in_seconds`"
+            "help": "Filter audio files in the training set that are longer than `max_duration_in_seconds` seconds"
         },
     )
     min_duration_in_seconds: float = field(
-        default=0.0, metadata={"help": "Filter audio files that are shorter than `min_duration_in_seconds` seconds"}
+        default=0.0, metadata={"help": "Filter audio files in the training set that are shorter than `min_duration_in_seconds` seconds"}
+    )
+    max_eval_duration_in_seconds: float = field(
+        default=None,
+        metadata={
+            "help": "Filter audio files in the eval/test set that are longer than `max_duration_in_seconds` seconds"
+        },
     )
     max_target_length: Optional[int] = field(
         default=128,
@@ -213,7 +219,7 @@ class DataTrainingArguments:
         },
     )
     min_target_length: Optional[int] = field(
-        default=2,
+        default=0,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
             "than this will be filtered."
@@ -869,6 +875,7 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
+    max_eval_input_length = int(data_args.max_eval_duration_in_seconds * feature_extractor.sampling_rate) if data_args.max_eval_duration_in_seconds else None
     max_target_length = data_args.max_target_length
     min_target_length = data_args.min_target_length
     pad_input_to_multiple_of = data_args.pad_input_to_multiple_of
@@ -881,6 +888,7 @@ def main():
     do_lower_case = data_args.do_lower_case
     log_first_ids = data_args.log_first_ids
     dataset_name = data_args.dataset_name
+    tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
@@ -912,78 +920,82 @@ def main():
         )
 
     def prepare_dataset(batch):
-        # process audio
+        # Pre-process audio
         try:
             sample = batch[audio_column_name]
         except ValueError:
+            # E22: some samples are empty (no audio). Reading the empty audio array will trigger
+            # a soundfile ValueError. For now, we'll manually set these arrays to a zero array.
+            # They will be filtered in the subsequent filtering stage and so are
+            # explicitly ignored during training.
             sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
+
+        # normalise audio (mean, std) to (0, 1)
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
         batch[model_input_name] = inputs.input_values[0]
         batch["input_length"] = len(batch["input_values"])
         batch["input_id"] = batch[id_column_name] if log_first_ids else None
 
-        # process targets
+        # 'Error correction' of targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
 
+        # LibriSpeech ASR
+        if dataset_name == "librispeech_asr":
+            pass  # no error correction necessary
+
+        # VoxPopuli
         if dataset_name == "google/xtreme_s":
-            # Finally, we tokenize the processed text
-            batch["labels"] = tokenizer(input_str).input_ids
-            batch["labels_length"] = len(batch["labels"])
-            return batch
+            pass  # no error correction necessary
 
         # Common Voice 9
-        if input_str.startswith('"') and input_str.endswith('"'):
-            # we can remove trailing quotation marks as they do not affect the transcription
-            input_str = input_str[1:-1]
-        # normalize quotation marks
-        input_str = re.sub(r'["“”]', '"', input_str)
-        # normalize apostrophes
-        input_str = re.sub(r"[’']", "'", input_str)
-        # normalize hyphens
-        input_str = re.sub(r"[—–]", "-", input_str)
-        # replace double quotation marks with single
-        input_str = input_str.replace('""', '"')
-        if dataset_name == "mozilla-foundation/common_voice_9_0" and len(input_str):
-            # for CV9, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+        if dataset_name == "mozilla-foundation/common_voice_9_0":
+            if input_str.startswith('"') and input_str.endswith('"'):
+                # we can remove trailing quotation marks as they do not affect the transcription
+                input_str = input_str[1:-1]
+            # replace double quotation marks with single
+            input_str = input_str.replace('""', '"')
 
-        # TEDLIUM-3
-        # delete the <unk> token from the text and replace spaced apostrophes with un-spaced
-        input_str = input_str.replace("<unk>", "").replace(" '", "'")
+        # TED-LIUM (Release 3)
+        if dataset_name == "LIUM/tedlium":
+            # delete the <unk> token from the text
+            input_str = input_str.replace("<unk>", "")
+            # replace spaced apostrophes with un-spaced (it 's -> it's)
+            for contraction in tedlium_contractions:
+                input_str = input_str.replace(contraction, contraction[1:])
 
         # GigaSpeech
-        for disfluency in gigaspeech_disfluencies:
-            input_str = input_str.replace(disfluency, "")
-        # convert spelled out punctuation to symbolic form
-        for punctuation, replacement in gigaspeech_punctuation.items():
-            input_str = input_str.replace(punctuation, replacement)
-        if dataset_name == "speechcolab/gigaspeech" and len(input_str):
-            # for GS, we'll normalize the text to always finish with punctuation
-            if input_str[-1] not in [".", "?", "!"]:
-                input_str = input_str + "."
+        if dataset_name == "speechcolab/gigaspeech":
+            for disfluency in gigaspeech_disfluencies:
+                input_str = input_str.replace(disfluency, "")
+            # convert spelled out punctuation to symbolic form
+            for punctuation, replacement in gigaspeech_punctuation.items():
+                input_str = input_str.replace(punctuation, replacement)
 
-        # SWB
-        for disfluency in swb_disfluencies:
-            input_str = input_str.replace(disfluency, "")
-        # remove parenthesised text (test data only)
-        input_str = re.sub("[\(].*?[\)]", "", input_str)
-        for punctuation in swb_punctuations:
-            input_str = input_str.replace(punctuation, "")
-        # replace anomalous words with their correct transcriptions
-        split_str = input_str.split("/")
-        if len(split_str) > 1:
-            input_str = " ".join(
-                [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+        # SWB: hide the path to the private HF dataset
+        if "switchboard" in dataset_name:
+            for disfluency in swb_disfluencies:
+                input_str = input_str.replace(disfluency, "")
+            # remove parenthesised text (test data only)
+            input_str = re.sub("[\(].*?[\)]", "", input_str)
+            for punctuation in swb_punctuations:
+                input_str = input_str.replace(punctuation, "")
+            # replace anomalous words with their correct transcriptions
+            split_str = input_str.split("/")
+            if len(split_str) > 1:
+                input_str = " ".join(
+                    [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
 
-        # Earnings 22
-        for disfluency in earnings_disfluencies:
-            input_str = input_str.replace(disfluency, "")
-        # replace mal-formatted ellipsis
-        input_str = input_str.replace("…", ".")
+        # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
+        if "earnings22" in dataset_name:
+            for disfluency in earnings_disfluencies:
+                input_str = input_str.replace(disfluency, "")
 
-        # JIWER compliance
+        # SPGISpeech
+        if dataset_name == "kensho/spgispeech":
+            pass  # no error correction necessary
+
+        # JIWER compliance (for WER/CER calc.)
         # remove multiple spaces
         input_str = re.sub(r"\s\s+", " ", input_str)
         # strip trailing spaces
@@ -1001,22 +1013,54 @@ def main():
         desc="preprocess train dataset",
     )
 
-    # filter data with inputs shorter than min_input_length or longer than max_input_length
+    # filter training data with inputs longer than max_input_length
     def is_audio_in_length_range(length):
-        return length > min_input_length and length < max_input_length
+        return min_input_length < length < max_input_length
 
-    vectorized_datasets = vectorized_datasets.filter(
-        is_audio_in_length_range,
-        num_proc=num_workers,
-        input_columns=["input_length"],
-    )
+    if training_args.do_train:
+        vectorized_datasets["train"] = vectorized_datasets["train"].filter(
+            is_audio_in_length_range,
+            num_proc=num_workers,
+            input_columns=["input_length"],
+        )
+
+    if max_eval_input_length is not None:
+        # filter training data with inputs longer than max_input_length
+        def is_eval_audio_in_length_range(length):
+            return min_input_length < length < max_eval_input_length
+
+        if training_args.do_eval:
+            vectorized_datasets["eval"] = vectorized_datasets["eval"].filter(
+                is_eval_audio_in_length_range,
+                num_proc=num_workers,
+                input_columns=["input_length"],
+            )
+
+        if training_args.do_test:
+            for split in test_split:
+                vectorized_datasets[split] = vectorized_datasets[split].filter(
+                    is_eval_audio_in_length_range,
+                    num_proc=num_workers,
+                    input_columns=["input_length"],
+                )
 
     # filter data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(length):
-        return length > min_target_length and length < max_target_length
+        return min_target_length < length < max_target_length
+
+    if training_args.do_train:
+        vectorized_datasets["train"] = vectorized_datasets["train"].filter(
+            is_labels_in_length_range,
+            num_proc=num_workers,
+            input_columns=["labels_length"],
+        )
+
+    # filter data with targets shorter than 2 tokens: <s></s> -> empty sentences
+    def is_labels_greater_than_min(length):
+        return length > 2
 
     vectorized_datasets = vectorized_datasets.filter(
-        is_labels_in_length_range,
+        is_labels_greater_than_min,
         num_proc=num_workers,
         input_columns=["labels_length"],
     )
