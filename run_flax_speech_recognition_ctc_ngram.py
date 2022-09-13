@@ -201,7 +201,7 @@ class DataTrainingArguments:
         default=0.0, metadata={"help": "Filter audio files in the training set that are shorter than `min_duration_in_seconds` seconds"}
     )
     max_label_length: Optional[int] = field(
-        default=512,
+        default=1024,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
             "than this will be filtered."
@@ -256,7 +256,7 @@ class DataTrainingArguments:
         },
     )
     do_lower_case: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether the target text should be lower cased."},
     )
     wandb_project: str = field(
@@ -993,7 +993,6 @@ def main():
 
         # 'Error correction' of targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
-
         # LibriSpeech ASR
         if dataset_name == "librispeech_asr":
             pass  # no error correction necessary

@@ -10,11 +10,11 @@ from pyctcdecode import build_ctcdecoder
 
 
 # adapt to dataset
-dataset_name = "LIUM/tedlium"
-dataset_config = "release3"
+dataset_name = "speech-seq2seq/ami"
+dataset_config = "ihm"
 split = "train"
 text_column = "text"
-tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-earnings22-cased-hidden-activation-featproj-dropout-0.2"
+tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-ami-black-box"
 do_lower = False # only set to TRUE if dataset is NOT cased
 
 # should be kept the same across datasets (except for ablation)
@@ -34,6 +34,16 @@ dir_path = f"{home_path}/ngrams/{dataset_name.split('/')[-1]}"
 text_save_path = f"{dir_path}/text.txt"
 ngram_save_path = f"{dir_path}/{file_name}"
 dataset_cache_dir = "/home/patrick/.cache/huggingface/datasets"
+
+# error corrections
+tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
+gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
+gigaspeech_disfluencies = ["<other>", "<sil>"]
+swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-", "[vocalized-noise]", "_1"]
+swb_punctuations = ["{", "}", "[", "]-", "]"]
+earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
+ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
+
 
 # in case the dataset requires access like CV9
 use_auth_token = True
@@ -108,8 +118,75 @@ def process_text(dataset, word_delimiter_token="|", do_lower=False, do_upper=Fal
     print(50 * "-")
 
 
-    def remove_rare_occurence_chars(batch):
-        all_text = " ".join(batch[text_column])
+    def correct_data(batch):
+        # LibriSpeech ASR
+        new_input_strings = []
+        for input_str in batch[text_column]:
+            if dataset_name == "librispeech_asr":
+                pass  # no error correction necessary
+
+            # VoxPopuli
+            if dataset_name == "google/xtreme_s":
+                pass  # no error correction necessary
+
+            # Common Voice 9
+            if dataset_name == "mozilla-foundation/common_voice_9_0":
+                if input_str.startswith('"') and input_str.endswith('"'):
+                    # we can remove trailing quotation marks as they do not affect the transcription
+                    input_str = input_str[1:-1]
+                # replace double quotation marks with single
+                input_str = input_str.replace('""', '"')
+
+            # TED-LIUM (Release 3)
+            if dataset_name == "LIUM/tedlium":
+                # delete the <unk> token from the text
+                input_str = input_str.replace("<unk>", "")
+                # replace spaced apostrophes with un-spaced (it 's -> it's)
+                for contraction in tedlium_contractions:
+                    input_str = input_str.replace(contraction, contraction[1:])
+
+            # GigaSpeech
+            if dataset_name == "speechcolab/gigaspeech":
+                for disfluency in gigaspeech_disfluencies:
+                    input_str = input_str.replace(disfluency, "")
+                # convert spelled out punctuation to symbolic form
+                for punctuation, replacement in gigaspeech_punctuation.items():
+                    input_str = input_str.replace(punctuation, replacement)
+
+            # SWB: hide the path to the private HF dataset
+            if "switchboard" in dataset_name:
+                for disfluency in swb_disfluencies:
+                    input_str = input_str.replace(disfluency, "")
+                # remove parenthesised text (test data only)
+                input_str = re.sub("[\(].*?[\)]", "", input_str)
+                for punctuation in swb_punctuations:
+                    input_str = input_str.replace(punctuation, "")
+                # replace anomalous words with their correct transcriptions
+                split_str = input_str.split("/")
+                if len(split_str) > 1:
+                    input_str = " ".join(
+                        [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+            # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
+            if "earnings22" in dataset_name:
+                for disfluency in earnings_disfluencies:
+                    input_str = input_str.replace(disfluency, "")
+
+            # SPGISpeech
+            if dataset_name == "kensho/spgispeech":
+                pass  # no error correction necessary
+
+            # JIWER compliance (for WER/CER calc.)
+            # remove multiple spaces
+            input_str = re.sub(r"\s\s+", " ", input_str)
+
+            # strip trailing spaces
+            input_str = input_str.strip()
+
+            new_input_strings.append(input_str)
+
+        all_text = " ".join(new_input_strings)
+
         for char in chars_to_remove:
             all_text = all_text.replace(char, "")
 
@@ -119,7 +196,7 @@ def process_text(dataset, word_delimiter_token="|", do_lower=False, do_upper=Fal
         return result
 
     dataset = dataset.map(
-        remove_rare_occurence_chars,
+        correct_data,
         batched=True,
         batch_size=-1,
         remove_columns=dataset.column_names,
@@ -140,6 +217,8 @@ if not os.path.isfile(text_save_path):
     Path(dir_path).mkdir(parents=True, exist_ok=True)
     with open(text_save_path, "w") as file:
         file.write(" ".join(text_data[text_column]))
+
+import ipdb; ipdb.set_trace()
 
 if not os.path.isfile(ngram_save_path):
     ngram_command = f"/home/patrick/kenlm/build/bin/lmplz -o 5 < '{text_save_path}' > '{ngram_save_path}' --skip_symbols"
@@ -193,6 +272,7 @@ os.system(f"mv '{bin_save_path}' '{new_ngram_path}'")
 
 
 # CONFIGS
+# ========================================================================
 # 1. LIBRISPEECH:
 #    dataset_name = "librispeech_asr"
 #    dataset_config = None
@@ -204,7 +284,29 @@ os.system(f"mv '{bin_save_path}' '{new_ngram_path}'")
 #    => no REMOVED CHARS: [] -> all chars are used
 
 # ========================================================================
-# 2. Earnings 22:
+# 2. TEDLIUM
+#    dataset_name = "LIUM/tedlium"
+#    dataset_config = "release3"
+#    split = "train"
+#    text_column = "text"
+#    tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-tedlium-black-box"
+#    do_lower = False # only set to TRUE if dataset is NOT cased
+
+# => REMOVED CHARS: ['0', '1', '2', '9', '[', ']', '3', '5', '8', '4', '$', '7', '6', '&', '+', '=', '#', '%', '@', '*', '\\', '^', 'ā']
+
+# ========================================================================
+# 3. AMI
+#    dataset_name = "speech-seq2seq/ami"
+#    dataset_config = "ihm"
+#    split = "train"
+#    text_column = "text"
+#    tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-ami-black-box"
+#    do_lower = False # only set to TRUE if dataset is NOT cased
+
+# => REMOVED CHARS: ['X', 'Q', 'Z', '0', '!', '*', '1', '3', '@']
+
+# ========================================================================
+# 4. Earnings 22:
 #    dataset_name = "sanchit-gandhi/earnings22_robust_split"
 #    dataset_config = None
 #    split = "train"
