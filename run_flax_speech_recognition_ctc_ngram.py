@@ -1111,7 +1111,7 @@ def main():
                 input_columns=["input_length"],
             )
 
-        if training_args.do_test:
+        if training_args.do_predict:
             for split in test_split:
                 vectorized_datasets[split] = vectorized_datasets[split].filter(
                     is_eval_audio_in_length_range,
@@ -1378,7 +1378,7 @@ def main():
     if training_args.do_train:
         p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
 
-    if training_args.do_eval:
+    if training_args.do_eval or training_args.do_predict:
         p_eval_step = jax.pmap(eval_step, "batch")
 
     def run_evaluation(step, final_step=False):
