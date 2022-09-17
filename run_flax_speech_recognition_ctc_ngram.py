@@ -1110,7 +1110,7 @@ def main():
                 input_columns=["input_length"],
             )
 
-        if training_args.do_test:
+        if training_args.do_predict:
             for split in test_split:
                 vectorized_datasets[split] = vectorized_datasets[split].filter(
                     is_eval_audio_in_length_range,
