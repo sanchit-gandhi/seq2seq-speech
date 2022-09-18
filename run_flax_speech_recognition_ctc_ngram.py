@@ -1081,6 +1081,12 @@ def main():
 
         # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
         if "earnings22" in dataset_name:
+            # Remove the 100ms offset at the end of the sample
+            sampling_rate = sample["sampling_rate"]
+            offset = int(100 * (10 ** -3) * sampling_rate)
+            batch["input_ids"] = sample["array"][:-offset]
+            batch["input_lengths"] = len(batch["input_ids"])
+            # Remove  junk tokens
             for disfluency in earnings_disfluencies:
                 input_str = input_str.replace(disfluency, "")
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 python run_flax_speech_recognition_seq2seq.py \
-        --dataset_name="sanchit-gandhi/earnings22_robust_split" \
+        --dataset_name="sanchit-gandhi/earnings22" \
         --model_name_or_path="sanchit-gandhi/flax-wav2vec2-2-bart-large-scan" \
         --dataset_config_name="all" \
         --train_split_name="train" \
         --eval_split_name="validation" \
         --test_split_name="test" \
         --text_column_name="sentence" \
-        --id_column_name="source_id" \
-        --output_dir="./flax-wav2vec2-2-bart-large-earnings22-baseline" \
+        --id_column_name="id" \
+        --output_dir="./flax-wav2vec2-2-bart-large-earnings22-black-box" \
         --wandb_project="earnings22" \
-        --wandb_name="flax-wav2vec2-2-bart-large-earnings22-baseline" \
+        --wandb_name="flax-wav2vec2-2-bart-large-earnings22-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="4" \
@@ -26,6 +26,9 @@ python run_flax_speech_recognition_seq2seq.py \
         --learning_rate="1e-4" \
         --warmup_steps="500" \
         --do_lower_case="False" \
+        --hidden_dropout="0.2" \
+        --activation_dropout="0.2" \
+        --feat_proj_dropout="0.2" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \
