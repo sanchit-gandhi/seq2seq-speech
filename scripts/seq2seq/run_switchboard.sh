@@ -2,15 +2,15 @@
 python run_flax_speech_recognition_seq2seq.py \
         --dataset_name="ldc/switchboard" \
         --model_name_or_path="sanchit-gandhi/flax-wav2vec2-2-bart-large-scan" \
-        --dataset_config_name="switchboard" \
-        --train_split_name="train" \
+        --dataset_config_name="all" \
+        --train_split_name="train.fisher+train.switchboard" \
         --eval_split_name="validation" \
         --test_split_name="test.switchboard+test.callhome" \
         --text_column_name="text" \
         --id_column_name="id" \
-        --output_dir="./flax-wav2vec2-2-bart-large-switchboard-black-box" \
+        --output_dir="./flax-wav2vec2-2-bart-large-switchboard-fisher-black-box" \
         --wandb_project="switchboard" \
-        --wandb_name="flax-wav2vec2-2-bart-large-switchboard-black-box" \
+        --wandb_name="flax-wav2vec2-2-bart-large-switchboard-fisher-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="2" \
@@ -23,9 +23,6 @@ python run_flax_speech_recognition_seq2seq.py \
         --generation_max_length="200" \
         --generation_num_beams="5" \
         --generation_length_penalty="1.2" \
-        --hidden_dropout="0.2" \
-        --activation_dropout="0.2" \
-        --feat_proj_dropout="0.2" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \

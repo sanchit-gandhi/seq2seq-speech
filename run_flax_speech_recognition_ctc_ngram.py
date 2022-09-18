@@ -945,13 +945,14 @@ def main():
     tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
-    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
-                        "[vocalized-noise]", "_1"]
-    swb_punctuations = ["{", "}", "[", "]-", "]"]
-    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
+    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<a_aside>", "<b_aside>", "<e_aside>",
+                        "[laughter-", "_1", "[laugh]", "[sigh]", "[cough]", "[mn]", "[breath]", "[lipsmack]",
+                        "[sneeze]", "[skip]", "[pause]", "(%hesitation)", "(%HESITATION)"]
+    swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")"]
+    earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>",
-                       "<sil>", ""]
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
+    ignore_segments += swb_disfluencies
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -1027,17 +1028,56 @@ def main():
 
         # SWB: hide the path to the private HF dataset
         if "switchboard" in dataset_name:
+            # In one conversation people speak some German phrases that are tagged as
+            # <german (( ja wohl )) > -- we remove these
+            input_str = re.sub("<[^>]*>", "", input_str)
+
+            # Remove junk tokens
             for disfluency in swb_disfluencies:
                 input_str = input_str.replace(disfluency, "")
-            # remove parenthesised text (test data only)
-            input_str = re.sub("[\(].*?[\)]", "", input_str)
-            for punctuation in swb_punctuations:
-                input_str = input_str.replace(punctuation, "")
-            # replace anomalous words with their correct transcriptions
+
+            # Replace partially pronounced words (square brackets + hyphen): westmin[ster]- to westmin- or -[go]ing to -ing
+            # Replace anomalous words (square brackets + backslack): [lemguini/linguini] to linguini
+            # Replace the combo of the two: [lem[guini]-/linguini] to lem-
+            # Example: we [ah/are] -[go]ing to westmin[ster]- for [lem[guini]-/linguini]
+            # Target: we ah -ing to westmin- for lem-
+            # Treat anomalous words first then destroy the content of all square brackets (partially pronounced words)
+
+            # First treat partially pronounced anomalous words by removing correct word: [lem[guini]-/linguini] to [lem[guini]-
+            input_str = re.sub(r"\-\/.*?\]", "-", input_str)
+
+            # Now replace anomalous words with their correct transcriptions: [lemguini/linguini] to linguini
             split_str = input_str.split("/")
             if len(split_str) > 1:
                 input_str = " ".join(
                     [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
+
+            # Remove the trailing brackets on the start/end of words
+            processed_str = []
+            for word in input_str.split():
+                if word[0] == "[":
+                    processed_str.append(word[1:])
+                elif word[-1] == "]":
+                    processed_str.append(word[:-1])
+                else:
+                    processed_str.append(word)
+
+            # Stick the processed words back together
+            input_str = " ".join(processed_str)
+
+            # Now we can remove all words in square brackets: -[go]ing to -ing
+            input_str = re.sub(r"\-\[(.*?)\]", "-", input_str)
+
+            # westmin[ster]- to westmin-
+            input_str = re.sub(r"\[(.*?)\]\-", "-", input_str)
+
+            # tech[n]ology to tech-ology
+            input_str = re.sub(r"\[(.*?)\]", "-", input_str)
+
+            # partially pronounced words are now done!
+            # remove erroneous punctuations (curly braces, trailing square brackets, etc.)
+            for punctuation in swb_punctuations:
+                input_str = input_str.replace(punctuation, "")
 
         # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
         if "earnings22" in dataset_name:
