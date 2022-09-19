@@ -278,6 +278,12 @@ class DataTrainingArguments:
     remove_punctuation: bool = field(
         default=False, metadata={"help": "Whether or not to remove punctuation during training."}
     )
+    ignore_verifications: bool = field(
+        default=False,
+        metadata={
+            "help": "Ignore the verifications of the downloaded/processed dataset information in `load_dataset` (checksums/size/splits/...)."
+        }
+    )
 
 
 # @flax.struct.dataclass
@@ -806,6 +812,7 @@ def main():
             split=data_args.train_split_name,
             cache_dir=data_args.dataset_cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
+            ignore_verifications=data_args.ignore_verifications,
         )
 
     if training_args.do_eval:
@@ -815,6 +822,7 @@ def main():
             split=data_args.eval_split_name,
             cache_dir=data_args.dataset_cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
+            ignore_verifications=data_args.ignore_verifications,
         )
 
     if training_args.do_predict:
@@ -826,6 +834,7 @@ def main():
                 split=split,
                 cache_dir=data_args.dataset_cache_dir,
                 use_auth_token=True if model_args.use_auth_token else None,
+                ignore_verifications=data_args.ignore_verifications,
             )
 
     if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:

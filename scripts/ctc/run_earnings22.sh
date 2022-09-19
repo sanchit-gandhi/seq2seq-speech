@@ -23,6 +23,7 @@ python run_flax_speech_recognition_ctc.py \
         --hidden_dropout="0.2" \
         --activation_dropout="0.2" \
         --feat_proj_dropout="0.2" \
+        --ignore_verifications="False" \
         --do_train \
         --do_eval \
         --do_predict \

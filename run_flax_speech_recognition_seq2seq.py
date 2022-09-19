@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import datasets
 import numpy as np
+import torchaudio
 from datasets import DatasetDict, load_dataset, load_metric
 from tqdm import tqdm
 
@@ -286,6 +287,18 @@ class DataTrainingArguments:
         metadata={
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
+    )
+    ignore_verifications: bool = field(
+        default=False,
+        metadata={
+            "help": "Ignore the verifications of the downloaded/processed dataset information in `load_dataset` (checksums/size/splits/...)."
+        }
+    )
+    torchaudio_resampler: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use torchaudio to resample. If `False` (default) will use the default datataset backed."
+        }
     )
 
 
@@ -747,6 +760,7 @@ def main():
             split=data_args.train_split_name,
             cache_dir=data_args.dataset_cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
+            ignore_verifications=data_args.ignore_verifications,
         )
 
     if training_args.do_eval:
@@ -756,6 +770,7 @@ def main():
             split=data_args.eval_split_name,
             cache_dir=data_args.dataset_cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
+            ignore_verifications=data_args.ignore_verifications,
         )
 
     if training_args.do_predict:
@@ -767,6 +782,7 @@ def main():
                 split=split,
                 cache_dir=data_args.dataset_cache_dir,
                 use_auth_token=True if model_args.use_auth_token else None,
+                ignore_verifications=data_args.ignore_verifications,
             )
 
     if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
@@ -867,9 +883,14 @@ def main():
         raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
     # 6. Resample speech dataset ALWAYS
-    raw_datasets = raw_datasets.cast_column(
+    if data_args.torchaudio_resampler:
+        # TODO: remove hardcoding of orig sr
+        resampler = torchaudio.transforms.Resample(8_000, feature_extractor.sampling_rate)
+    else:
+        raw_datasets = raw_datasets.cast_column(
         data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
     )
+        resampler = None
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -931,6 +952,11 @@ def main():
             # They will be filtered in the subsequent filtering stage and so are
             # explicitly ignored during training.
             sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
+
+        if resampler is not None:
+            speech_array = resampler(sample["array"])
+            sample["array"] = speech_array.numpy()
+            sample["sampling_rate"] = resampler.new_freq
 
         # normalise audio (mean, std) to (0, 1)
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])

@@ -29,6 +29,7 @@ python run_flax_speech_recognition_seq2seq.py \
         --hidden_dropout="0.2" \
         --activation_dropout="0.2" \
         --feat_proj_dropout="0.2" \
+        --ignore_verifications="False" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \
