@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 python run_flax_speech_recognition_ctc.py \
         --model_name_or_path="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
-        --tokenizer_name="sanchit-gandhi/wav2vec2_ctc_earnings22_tokenizer" \
-        --dataset_name="sanchit-gandhi/earnings22_robust_split" \
+        --tokenizer_name="sanchit-gandhi/wav2vec2-ctc-earnings22-black-box-tokenizer" \
+        --dataset_name="sanchit-gandhi/earnings22" \
         --dataset_config_name="all" \
         --train_split_name="train" \
         --eval_split_name="validation" \
         --test_split_name="test" \
         --text_column_name="sentence" \
-        --output_dir="./flax-wav2vec2-ctc-earnings22-baseline" \
+        --output_dir="./flax-wav2vec2-ctc-earnings22-black-box" \
         --wandb_project="earnings22" \
-        --wandb_name="flax-wav2vec2-ctc-earnings22-baseline" \
+        --wandb_name="flax-wav2vec2-ctc-earnings22-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --max_steps="50000" \
         --save_steps="10000" \
@@ -19,6 +19,11 @@ python run_flax_speech_recognition_ctc.py \
         --logging_steps="25" \
         --warmup_steps="5000" \
         --preprocessing_num_workers="1" \
+        --do_lower_case="False" \
+        --hidden_dropout="0.2" \
+        --activation_dropout="0.2" \
+        --feat_proj_dropout="0.2" \
+        --ignore_verifications="False" \
         --do_train \
         --do_eval \
         --do_predict \
