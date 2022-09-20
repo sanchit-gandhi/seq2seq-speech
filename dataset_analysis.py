@@ -21,6 +21,7 @@ dataset_name, dataset_config, text_column = sys.argv[1:]
 # 6. python dataset_analysis.py "kensho/spgispeech" "L" "transcript"
 # 7. python dataset_analysis.py "speechcolab/gigaspeech" "l" "text"
 # 8. python dataset_analysis.py "mozilla-foundation/common_voice_9_0" "en" "sentence"
+# 9. python dataset_analysis.py "speech-seq2seq/chime4-raw" "1-channel" "text"
 
 
 # Adapt
@@ -28,7 +29,7 @@ dataset_name, dataset_config, text_column = sys.argv[1:]
 use_auth_token = True
 dataset_cache_dir = "/home/patrick/.cache/huggingface/datasets"
 
-folder = f"{'_'.join(dataset_name.split('/'))}_{dataset_config}_stats_new_v3"
+folder = f"{'_'.join(dataset_name.split('/'))}_{dataset_config}_stats_v3"
 folder = os.path.join("/home/patrick/datasets_stats", folder)
 stats_file = folder + ".txt"
 
