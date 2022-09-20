@@ -8,17 +8,26 @@ import tempfile
 from transformers import Wav2Vec2CTCTokenizer
 
 # which dataset
-dataset_name = "ldc/switchboard"
+dataset_name = "sanchit-gandhi/earnings22"
 # which config
-dataset_config = "switchboard"
+dataset_config = "all"
 # which split => @Sanchit, we should only use the train split for "fairness"
 split = "train"
 # in case the dataset requires access like CV9
 use_auth_token = True
 # name of the text data column
-text_column = "text"
+text_column = "sentence"
 # name of tok to upload to the Hub
-tokenizer_name = "wav2vec2_ctc_swb_tokenizer"
+tokenizer_name = "wav2vec2-ctc-earnings22-black-box-tokenizer"
+# only set to TRUE if dataset is NOT cased
+do_lower = False
+# ignore the verifications of the downloaded/processed dataset information in `load_dataset`, set to False in most cases, True for E22
+ignore_verifications = True
+
+# should be kept the same across datasets (except for ablation)
+do_upper = False
+remove_punctuation = False
+cutoff_freq = 0.01
 # dataset cache directory
 dataset_cache_dir = "/home/sanchitgandhi/cache/huggingface/datasets"
 # For GigaSpeech, we need to convert spelled out punctuation to symbolic form
@@ -34,6 +43,7 @@ dataset = load_dataset(
     split=split,
     use_auth_token=use_auth_token,
     cache_dir=dataset_cache_dir,
+    ignore_verifications= ignore_verifications,
 )
 
 # remove all data that is unnecessary to save RAM
@@ -282,10 +292,6 @@ Total characters in dataset: 57415071
 # It keeps all letters of the alphabet and some punctuation, but removes clearly all incorrect letters like
 # accentuated letters from German or French, Chinese letters, ...
 # Running it once more and now keeping the dict
-do_lower = True
-do_upper = False
-remove_punctuation = False
-cutoff_freq = 0.01
 
 vocab_dict = create_vocabulary_from_data(dataset, do_lower=do_lower, do_upper=do_upper, remove_punctuation=remove_punctuation, cutoff_freq=cutoff_freq)
 

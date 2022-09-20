@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 python run_flax_speech_recognition_ctc.py \
         --model_name_or_path="speech-seq2seq/flax-wav2vec2-large-lv60-scan" \
-        --tokenizer_name="sanchit-gandhi/wav2vec2-ctc-spgispeech-tokenizer" \
-        --dataset_name="kensho/spgispeech" \
-        --dataset_config_name="L" \
+        --tokenizer_name="sanchit-gandhi/wav2vec2-ctc-cv9-black-box-tokenizer" \
+        --dataset_name="mozilla-foundation/common_voice_9_0" \
+        --dataset_config_name="en" \
         --train_split_name="train" \
         --eval_split_name="validation" \
         --test_split_name="test" \
-        --text_column_name="transcript" \
-        --output_dir="./flax-wav2vec2-ctc-spgispeech-baseline" \
-        --wandb_project="spgispeech" \
-        --wandb_name="flax-wav2vec2-ctc-spgispeech-baseline" \
+        --text_column_name="sentence" \
+        --output_dir="./flax-wav2vec2-ctc-cv9-black-box" \
+        --wandb_project="common_voice_9_0" \
+        --wandb_name="flax-wav2vec2-ctc-cv9-black-box" \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --max_steps="50000" \
         --save_steps="10000" \
@@ -20,6 +20,7 @@ python run_flax_speech_recognition_ctc.py \
         --warmup_steps="5000" \
         --preprocessing_num_workers="1" \
         --do_lower_case="False" \
+        --max_eval_duration_in_seconds="20" \
         --do_train \
         --do_eval \
         --do_predict \

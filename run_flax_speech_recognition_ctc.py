@@ -210,6 +210,12 @@ class DataTrainingArguments:
             "than this will be filtered."
         },
     )
+    max_eval_duration_in_seconds: float = field(
+        default=None,
+        metadata={
+            "help": "Filter audio files in the eval/test set that are longer than `max_duration_in_seconds` seconds"
+        },
+    )
     pad_input_to_multiple_of: Optional[int] = field(
         default=32000,
         metadata={
@@ -267,6 +273,12 @@ class DataTrainingArguments:
     )
     remove_punctuation: bool = field(
         default=False, metadata={"help": "Whether or not to remove punctuation during training."}
+    )
+    ignore_verifications: bool = field(
+        default=False,
+        metadata={
+            "help": "Ignore the verifications of the downloaded/processed dataset information in `load_dataset` (checksums/size/splits/...)."
+        }
     )
 
 
@@ -562,19 +574,30 @@ def write_wandb_log(metrics, step, prefix=None):
         wandb.log(log_metrics, step)
 
 
-def write_wandb_pred(pred_str, label_str, step, num_log=50, prefix="eval"):
+def write_wandb_pred(pred_str, label_str, step, final_step=False, prefix="eval"):
     if jax.process_index() == 0:
         # convert str data to a wandb compatible format
         str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
-        # we'll log the first 50 predictions for each epoch
-        wandb.log(
-            {
-                f"{prefix}/step_{int(step / 1000)}k": wandb.Table(
-                    columns=["label_str", "pred_str"], data=str_data[:num_log]
-                )
-            },
-            step,
-        )
+        if not final_step:
+            # we'll log the first 50 predictions for each intermediate epoch
+            wandb.log(
+                {
+                    f"{prefix}/step_{int(step / 1000)}k": wandb.Table(
+                        columns=["label_str", "pred_str"], data=str_data[:50]
+                    )
+                },
+                step,
+            )
+        else:
+            # we'll log all predictions for the last epoch
+            wandb.log(
+                {
+                    f"{prefix}/step_{int(step / 1000)}k_all": wandb.Table(
+                        columns=["label_str", "pred_str"], data=str_data
+                    )
+                },
+                step,
+            )
 
 
 def create_learning_rate_fn(
@@ -766,6 +789,7 @@ def main():
             split=data_args.train_split_name,
             cache_dir=data_args.dataset_cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
+            ignore_verifications=data_args.ignore_verifications,
         )
 
     if training_args.do_eval:
@@ -775,6 +799,7 @@ def main():
             split=data_args.eval_split_name,
             cache_dir=data_args.dataset_cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
+            ignore_verifications=data_args.ignore_verifications,
         )
 
     if training_args.do_predict:
@@ -786,6 +811,7 @@ def main():
                 split=split,
                 cache_dir=data_args.dataset_cache_dir,
                 use_auth_token=True if model_args.use_auth_token else None,
+                ignore_verifications=data_args.ignore_verifications,
             )
 
     if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
@@ -882,6 +908,7 @@ def main():
     # We need to read the audio files as arrays and tokenize the targets.
     max_input_length = int(data_args.max_duration_in_seconds * feature_extractor.sampling_rate)
     min_input_length = int(data_args.min_duration_in_seconds * feature_extractor.sampling_rate)
+    max_eval_input_length = int(data_args.max_eval_duration_in_seconds * feature_extractor.sampling_rate) if data_args.max_eval_duration_in_seconds else None
     max_target_length = data_args.max_label_length
     min_target_length = data_args.min_label_length
     pad_input_to_multiple_of = data_args.pad_input_to_multiple_of
@@ -894,12 +921,14 @@ def main():
     tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
-    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
-                    "[vocalized-noise]", "_1"]
-    swb_punctuations = ["{", "}", "[", "]-", "]"]
-    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
+    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<a_aside>", "<b_aside>", "<e_aside>",
+                        "[laughter-", "_1", "[laugh]", "[sigh]", "[cough]", "[mn]", "[breath]", "[lipsmack]",
+                        "[sneeze]", "[skip]", "[pause]", "(%hesitation)", "(%HESITATION)"]
+    swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")"]
+    earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
+    ignore_segments += swb_disfluencies
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -976,20 +1005,65 @@ def main():
 
         # SWB: hide the path to the private HF dataset
         if "switchboard" in dataset_name:
+            # In one conversation people speak some German phrases that are tagged as
+            # <german (( ja wohl )) > -- we remove these
+            input_str = re.sub("<[^>]*>", "", input_str)
+
+            # Remove junk tokens
             for disfluency in swb_disfluencies:
                 input_str = input_str.replace(disfluency, "")
-            # remove parenthesised text (test data only)
-            input_str = re.sub("[\(].*?[\)]", "", input_str)
-            for punctuation in swb_punctuations:
-                input_str = input_str.replace(punctuation, "")
-            # replace anomalous words with their correct transcriptions
+
+            # Replace partially pronounced words (square brackets + hyphen): westmin[ster]- to westmin- or -[go]ing to -ing
+            # Replace anomalous words (square brackets + backslack): [lemguini/linguini] to linguini
+            # Replace the combo of the two: [lem[guini]-/linguini] to lem-
+            # Example: we [ah/are] -[go]ing to westmin[ster]- for [lem[guini]-/linguini]
+            # Target: we ah -ing to westmin- for lem-
+            # Treat anomalous words first then destroy the content of all square brackets (partially pronounced words)
+
+            # First treat partially pronounced anomalous words by removing correct word: [lem[guini]-/linguini] to [lem[guini]-
+            input_str = re.sub(r"\-\/.*?\]", "-", input_str)
+
+            # Now replace anomalous words with their correct transcriptions: [lemguini/linguini] to linguini
             split_str = input_str.split("/")
             if len(split_str) > 1:
                 input_str = " ".join(
                     [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
 
+            # Remove the trailing brackets on the start/end of words
+            processed_str = []
+            for word in input_str.split():
+                if word[0] == "[":
+                    processed_str.append(word[1:])
+                elif word[-1] == "]":
+                    processed_str.append(word[:-1])
+                else:
+                    processed_str.append(word)
+
+            # Stick the processed words back together
+            input_str = " ".join(processed_str)
+
+            # Now we can remove all words in square brackets: -[go]ing to -ing
+            input_str = re.sub(r"\-\[(.*?)\]", "-", input_str)
+
+            # westmin[ster]- to westmin-
+            input_str = re.sub(r"\[(.*?)\]\-", "-", input_str)
+
+            # tech[n]ology to tech-ology
+            input_str = re.sub(r"\[(.*?)\]", "-", input_str)
+
+            # partially pronounced words are now done!
+            # remove erroneous punctuations (curly braces, trailing square brackets, etc.)
+            for punctuation in swb_punctuations:
+                input_str = input_str.replace(punctuation, "")
+
         # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
         if "earnings22" in dataset_name:
+            # Remove the 100ms offset at the end of the sample
+            sampling_rate = sample["sampling_rate"]
+            offset = int(100 * (10 ** -3) * sampling_rate)
+            batch["input_ids"] = sample["array"][:-offset]
+            batch["input_lengths"] = len(batch["input_ids"])
+            # Remove  junk tokens
             for disfluency in earnings_disfluencies:
                 input_str = input_str.replace(disfluency, "")
 
@@ -1017,7 +1091,7 @@ def main():
 
     # filter training data with inputs longer than max_input_length
     def is_audio_in_length_range(length):
-        return length > min_input_length and length < max_input_length
+        return min_input_length < length < max_input_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
@@ -1028,7 +1102,7 @@ def main():
 
     # filter data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(length):
-        return length > min_target_length and length < max_target_length
+        return min_target_length < length < max_target_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
@@ -1046,6 +1120,26 @@ def main():
         num_proc=num_workers,
         input_columns=["labels_length"],
     )
+
+    if max_eval_input_length is not None:
+        # filter training data with inputs longer than max_input_length
+        def is_eval_audio_in_length_range(length):
+            return min_input_length < length < max_eval_input_length
+
+        if training_args.do_eval:
+            vectorized_datasets["eval"] = vectorized_datasets["eval"].filter(
+                is_eval_audio_in_length_range,
+                num_proc=num_workers,
+                input_columns=["input_length"],
+            )
+
+        if training_args.do_predict:
+            for split in test_split:
+                vectorized_datasets[split] = vectorized_datasets[split].filter(
+                    is_eval_audio_in_length_range,
+                    num_proc=num_workers,
+                    input_columns=["input_length"],
+                )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -1300,10 +1394,10 @@ def main():
     if training_args.do_train:
         p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
 
-    if training_args.do_eval:
+    if training_args.do_eval or training_args.do_predict:
         p_eval_step = jax.pmap(eval_step, "batch")
 
-    def run_evaluation(step):
+    def run_evaluation(step, final_step=False):
         if training_args.do_eval:
             # ======================== Evaluating ==============================
             eval_metrics = []
@@ -1319,7 +1413,10 @@ def main():
                 batch = data_collator(samples)
                 labels = batch["labels"]
 
-                metrics, pred_ids = pad_shard_unpad(p_eval_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
+                try:
+                    metrics, pred_ids = pad_shard_unpad(p_eval_step)(state.params, batch.data, min_device_batch=per_device_eval_batch_size)
+                except TypeError:
+                    continue
                 eval_preds.extend(jax.device_get(pred_ids.reshape(-1, pred_ids.shape[-1])))
                 eval_metrics.append(metrics)
 
@@ -1342,7 +1439,7 @@ def main():
 
             # Save metrics
             write_wandb_log(eval_metrics, step, prefix="eval")
-            write_wandb_pred(pred_str, label_str, step)
+            write_wandb_pred(pred_str, label_str, step, final_step=final_step)
             # if has_tensorboard and jax.process_index() == 0:
             # write_eval_metric(summary_writer, eval_metrics, step, pred_str=pred_str)
 
@@ -1410,14 +1507,14 @@ def main():
                     break
 
                 if training_args.eval_steps and cur_step % training_args.eval_steps == 0:
-                    run_evaluation(cur_step)
+                    run_evaluation(cur_step, final_step=False)
 
                 if cur_step % training_args.save_steps == 0:
                     save_checkpoint(cur_step)
 
             if training_args.eval_steps == 0 and (epoch + 1) != num_epochs:
                 # run evaluation at the end of the epoch if eval steps are not specified
-                run_evaluation(cur_step)
+                run_evaluation(cur_step, final_step=False)
                 save_checkpoint(cur_step)
 
     if training_args.do_train:
@@ -1426,7 +1523,7 @@ def main():
     cur_step = max_steps if max_steps > 0 else cur_step  # set step to max steps so that eval happens in alignment with training
 
     if training_args.do_eval:
-        run_evaluation(cur_step)
+        run_evaluation(cur_step, final_step=True)
 
     # TODO: collapse 'do_predict' into the run_evaluation function
     if training_args.do_predict:
@@ -1468,7 +1565,7 @@ def main():
 
             # Save metrics
             write_wandb_log(eval_metrics, cur_step, prefix=split)
-            write_wandb_pred(pred_str, label_str, cur_step, prefix=split)
+            write_wandb_pred(pred_str, label_str, cur_step, final_step=True, prefix=split)
             # if has_tensorboard and jax.process_index() == 0:
             # write_eval_metric(summary_writer, eval_metrics, cur_step, pred_str=pred_str)
 
