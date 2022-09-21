@@ -23,6 +23,7 @@ python run_flax_speech_recognition_seq2seq.py \
         --generation_max_length="200" \
         --generation_num_beams="5" \
         --generation_length_penalty="1.2" \
+        --torchaudio_resampler="True" \
         --overwrite_output_dir \
         --gradient_checkpointing \
         --freeze_feature_encoder \

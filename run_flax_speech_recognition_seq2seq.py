@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import datasets
 import numpy as np
+import torch
 import torchaudio
 from datasets import DatasetDict, load_dataset, load_metric
 from tqdm import tqdm
@@ -915,7 +916,7 @@ def main():
     swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<a_aside>", "<b_aside>", "<e_aside>",
                         "[laughter-", "_1", "[laugh]", "[sigh]", "[cough]", "[mn]", "[breath]", "[lipsmack]",
                         "[sneeze]", "[skip]", "[pause]", "(%hesitation)", "(%HESITATION)"]
-    swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")"]
+    swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")", "."]
     earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
@@ -954,8 +955,10 @@ def main():
             sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
 
         if resampler is not None:
-            speech_array = resampler(sample["array"])
-            sample["array"] = speech_array.numpy()
+            speech_tensor = torch.FloatTensor(sample["array"])
+            speech_tensor = speech_tensor.squeeze()
+            speech_tensor = resampler(speech_tensor)
+            sample["array"] = speech_tensor.numpy()
             sample["sampling_rate"] = resampler.new_freq
 
         # normalise audio (mean, std) to (0, 1)
@@ -1009,6 +1012,9 @@ def main():
             # Remove junk tokens
             for disfluency in swb_disfluencies:
                 input_str = input_str.replace(disfluency, "")
+
+            # normalise acronyms (Fisher: u_.c_.l_.a., SWBD: u c l a)
+            input_str = input_str.replace("_.", " ")
 
             # Replace partially pronounced words (square brackets + hyphen): westmin[ster]- to westmin- or -[go]ing to -ing
             # Replace anomalous words (square brackets + backslack): [lemguini/linguini] to linguini

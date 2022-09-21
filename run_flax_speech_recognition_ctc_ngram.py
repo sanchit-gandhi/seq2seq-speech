@@ -30,6 +30,8 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import datasets
 import numpy as np
+import torch
+import torchaudio
 from datasets import DatasetDict, load_dataset, load_metric
 from tqdm import tqdm
 
@@ -282,6 +284,12 @@ class DataTrainingArguments:
         default=False,
         metadata={
             "help": "Ignore the verifications of the downloaded/processed dataset information in `load_dataset` (checksums/size/splits/...)."
+        }
+    )
+    torchaudio_resampler: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use torchaudio to resample. If `False` (default) will use the default datataset backed."
         }
     )
 
@@ -933,9 +941,14 @@ def main():
     )
 
     # 6. Resample speech dataset ALWAYS
-    raw_datasets = raw_datasets.cast_column(
+    if data_args.torchaudio_resampler:
+        # TODO: remove hardcoding of orig sr
+        resampler = torchaudio.transforms.Resample(8_000, feature_extractor.sampling_rate)
+    else:
+        raw_datasets = raw_datasets.cast_column(
         data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
     )
+        resampler = None
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -995,6 +1008,13 @@ def main():
             # explicitly ignored during training.
             sample = {"array": np.array([0.]), "sampling_rate": feature_extractor.sampling_rate}
 
+        if resampler is not None:
+            speech_tensor = torch.FloatTensor(sample["array"])
+            speech_tensor = speech_tensor.squeeze()
+            speech_tensor = resampler(speech_tensor)
+            sample["array"] = speech_tensor.numpy()
+            sample["sampling_rate"] = resampler.new_freq
+
         # normalise audio (mean, std) to (0, 1)
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
@@ -1044,6 +1064,9 @@ def main():
             # Remove junk tokens
             for disfluency in swb_disfluencies:
                 input_str = input_str.replace(disfluency, "")
+
+            # normalise acronyms (Fisher: u_.c_.l_.a., SWBD: u c l a)
+            input_str = input_str.replace("_.", " ")
 
             # Replace partially pronounced words (square brackets + hyphen): westmin[ster]- to westmin- or -[go]ing to -ing
             # Replace anomalous words (square brackets + backslack): [lemguini/linguini] to linguini
