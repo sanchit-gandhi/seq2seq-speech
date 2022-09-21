@@ -20,6 +20,7 @@ python run_flax_speech_recognition_ctc.py \
         --warmup_steps="5000" \
         --preprocessing_num_workers="1" \
         --do_lower_case="False" \
+        --torchaudio_resampler="True" \
         --do_train \
         --do_eval \
         --do_predict \
