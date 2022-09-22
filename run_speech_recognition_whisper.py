@@ -21,6 +21,7 @@ Fine-tuning OpenAI Whisper models for speech recognition.
 import logging
 import os
 import re
+import string
 
 import torchaudio
 import whisper
@@ -488,6 +489,9 @@ def main():
     do_lower_case = data_args.do_lower_case
     dataset_name = data_args.dataset_name
 
+    punctuation = string.punctuation.replace("'", "")
+    punctuation_to_remove_regex = f'[{"".join(punctuation)}]'
+
     # Define tokens to ignore/replace
     tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
@@ -543,6 +547,7 @@ def main():
         # For training Whisper we perform the audio preprocessing in the WhisperDataCollator
         # => we only need to supply it with the raw audio values
         batch["input_ids"] = sample["array"]
+        batch["input_lengths"] = len(batch["input_ids"])
 
         # 'Error correction' of targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
@@ -641,6 +646,7 @@ def main():
             sampling_rate = sample["sampling_rate"]
             offset = int(100 * (10 ** -3) * sampling_rate)
             batch["input_ids"] = sample["array"][:-offset]
+            batch["input_lengths"] = len(batch["input_ids"])
             # Remove  junk tokens
             for disfluency in earnings_disfluencies:
                 input_str = input_str.replace(disfluency, "")
@@ -667,26 +673,26 @@ def main():
     )
 
     # filter training data with inputs longer than max_input_length
-    def is_audio_in_length_range(input_ids):
-        return min_input_length < len(input_ids) < max_input_length
+    def is_audio_in_length_range(input_length):
+        return min_input_length < input_length < max_input_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
             is_audio_in_length_range,
             num_proc=num_workers,
-            input_columns=["input_ids"],
+            input_columns=["input_lengths"],
         )
 
     if max_eval_input_length is not None:
         # filter training data with inputs longer than max_input_length
-        def is_eval_audio_in_length_range(input_ids):
-            return min_input_length < len(input_ids) < max_eval_input_length
+        def is_eval_audio_in_length_range(input_length):
+            return min_input_length < input_length < max_eval_input_length
 
         if training_args.do_eval:
             vectorized_datasets["eval"] = vectorized_datasets["eval"].filter(
                 is_eval_audio_in_length_range,
                 num_proc=num_workers,
-                input_columns=["input_ids"],
+                input_columns=["input_lengths"],
             )
 
         if training_args.do_test:
@@ -694,7 +700,7 @@ def main():
                 vectorized_datasets[split] = vectorized_datasets[split].filter(
                     is_eval_audio_in_length_range,
                     num_proc=num_workers,
-                    input_columns=["input_ids"],
+                    input_columns=["input_lengths"],
                 )
 
     # filter data with targets shorter than min_target_length or longer than max_target_length
@@ -757,8 +763,8 @@ def main():
         cer_lower = metric_cer.compute(predictions=pred_str_lower, references=label_str_lower)
 
         # replace all punctuation in the predicted string
-        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_lower]
-        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in label_str_lower]
+        normalized_pred_str = [re.sub(punctuation_to_remove_regex, " ", input_str) for input_str in pred_str_lower]
+        normalized_label_str = [re.sub(punctuation_to_remove_regex, " ", input_str) for input_str in label_str_lower]
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
 

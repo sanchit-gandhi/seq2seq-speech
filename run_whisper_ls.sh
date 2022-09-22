@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
 	--model_name_or_path="small.en" \
-	--dataset_name="hf-internal-testing/librispeech_asr_dummy" \
+	--dataset_name="librispeech_asr" \
 	--num_train_epochs="1" \
 	--evaluation_strategy="epoch" \
-	--dataset_config_name="clean" \
-	--train_split_name="validation[:32]" \
-	--eval_split_name="validation" \
-	--test_split_name="validation[:90%]" \
+	--dataset_config_name="all" \
+	--train_split_name="train.100.clean" \
+	--eval_split_name="validation.clean" \
+	--test_split_name="validation.other+test.clean+test.other" \
 	--text_column_name="text" \
 	--output_dir="./output_dir" \
-	--run_name="whisper-ls-dummy" \
+	--run_name="whisper-ls-small.en" \
 	--wandb_project="whisper-dummy" \
 	--per_device_train_batch_size="8" \
 	--per_device_eval_batch_size="4" \
@@ -31,4 +31,4 @@ CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
 	--do_eval \
 	--do_predict \
 	--predict_with_generate \
-	--generation_max_length=64 \
+	--generation_max_length=128 \
