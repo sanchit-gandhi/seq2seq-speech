@@ -751,17 +751,14 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        if do_lower_case:
-            pred_str = [x.lower() for x in pred_str]
-            wer_lower = metric_wer.compute(predictions=pred_str, references=label_str)
-            cer_lower = metric_cer.compute(predictions=pred_str, references=label_str)
-        else:
-            wer_lower = None
-            cer_lower = None
+        pred_str_lower = [x.lower() for x in pred_str]
+        label_str_lower = [x.lower() for x in label_str]
+        wer_lower = metric_wer.compute(predictions=pred_str_lower, references=label_str_lower)
+        cer_lower = metric_cer.compute(predictions=pred_str_lower, references=label_str_lower)
 
         # replace all punctuation in the predicted string
-        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str]
-        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str]
+        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_lower]
+        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in label_str_lower]
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
 
@@ -780,18 +777,14 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        if do_lower_case:
-            pred_str_maybe_lower = [x.lower() for x in pred_str]
-            wer_lower = metric_wer.compute(predictions=pred_str_maybe_lower, references=label_str)
-            cer_lower = metric_cer.compute(predictions=pred_str_maybe_lower, references=label_str)
-        else:
-            pred_str_maybe_lower = pred_str
-            wer_lower = None
-            cer_lower = None
+        pred_str_lower = [x.lower() for x in pred_str]
+        label_str_lower = [x.lower() for x in label_str]
+        wer_lower = metric_wer.compute(predictions=pred_str_lower, references=label_str_lower)
+        cer_lower = metric_cer.compute(predictions=pred_str_lower, references=label_str_lower)
 
         # replace all punctuation in the predicted string
-        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_maybe_lower]
-        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_maybe_lower]
+        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_lower]
+        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in label_str_lower]
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
 
