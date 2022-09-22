@@ -917,10 +917,10 @@ def main():
                         "[laughter-", "_1", "[laugh]", "[sigh]", "[cough]", "[mn]", "[breath]", "[lipsmack]",
                         "[sneeze]", "[skip]", "[pause]", "(%hesitation)", "(%HESITATION)"]
     swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")", "."]
-    earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
+    earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<silence>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
-    ignore_segments += swb_disfluencies
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", ""]
+    ignore_segments = ignore_segments + gigaspeech_disfluencies + swb_disfluencies + earnings_disfluencies
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
