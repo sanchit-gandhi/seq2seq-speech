@@ -18,12 +18,12 @@ Fine-tuning OpenAI Whisper models for speech recognition.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 # flake8: noqa: E501
-import copy
 import logging
 import os
 import re
+
+import torchaudio
 import whisper
-from transformers import GPT2TokenizerFast
 import sys
 import evaluate
 from dataclasses import dataclass, field
@@ -45,6 +45,8 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
+
+import wandb
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
@@ -161,8 +163,6 @@ class ApplyTimestampRules:
         return logits
 
 
-
-
 @dataclass
 class DataTrainingArguments:
     """
@@ -277,8 +277,33 @@ class DataTrainingArguments:
         metadata={"help": "Whether the target text should be lower cased."},
     )
     wandb_project: str = field(
-        default="speech-recognition-rnnt",
+        default="speech-recognition-whisper",
         metadata={"help": "The name of the wandb project."},
+    )
+    ignore_verifications: bool = field(
+        default=False,
+        metadata={
+            "help": "Ignore the verifications of the downloaded/processed dataset information in `load_dataset` (checksums/size/splits/...)."
+        }
+    )
+    torchaudio_resampler: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use torchaudio to resample. If `False` (default) will use the default datataset backed."
+        }
+    )
+
+
+def write_wandb_pred(pred_str, label_str, prefix="eval"):
+    # convert str data to a wandb compatible format
+    str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
+    # we'll log all predictions for the last epoch
+    wandb.log(
+        {
+            f"{prefix}/predictions": wandb.Table(
+                columns=["label_str", "pred_str"], data=str_data
+            )
+        },
     )
 
 
@@ -301,7 +326,7 @@ def WhisperDataCollator(features: List[Dict[str, Union[List[int], torch.Tensor]]
 
     # first, pad the audio inputs to max_len
 #    input_ids = np.asarray([transform(input_val) for input_val in input_ids], dtype=np.float32)
-    input_ids = torch.concat([transform(input_val)[None,:] for input_val in input_ids])
+    input_ids = torch.concat([transform(input_val)[None, :] for input_val in input_ids])
 
     # next, pad the target labels to max_len
     label_lengths = [len(lab) for lab in labels]
@@ -331,6 +356,7 @@ def main():
 
     # Set wandb project ID before instantiating the Trainer
     os.environ["WANDB_PROJECT"] = data_args.wandb_project
+    report_to_wandb = "wandb" in training_args.report_to
 
     sample_rate = 16_000
 
@@ -372,6 +398,16 @@ def main():
 
     # load the model 
     model = whisper.load_model(model_args.model_name_or_path)
+    
+    # load the tokenizer
+    whisper_tok = whisper.tokenizer.get_tokenizer(False, task="transcribe", language="en")
+    decoding_options = whisper.decoding.DecodingOptions(task="transcribe", language="en")
+    task = whisper.decoding.DecodingTask(model, decoding_options)
+    suppress_tokens = task._get_suppress_tokens()
+
+    logits_processors = [SuppressBlank(whisper_tok), SuppressTokens(suppress_tokens), ApplyTimestampRules(whisper_tok)]
+    tokenizer = whisper_tok.tokenizer
+    tokenizer.pad_token = tokenizer.eos_token
 
     # 4. Load dataset
     raw_datasets = DatasetDict()
@@ -430,9 +466,14 @@ def main():
         )
 
     # 6. Resample speech dataset ALWAYS
-    raw_datasets = raw_datasets.cast_column(
-        data_args.audio_column_name, datasets.features.Audio(sampling_rate=sample_rate)
-    )
+    if data_args.torchaudio_resampler:
+        # TODO: remove hardcoding of orig sr
+        resampler = torchaudio.transforms.Resample(8_000, sample_rate)
+    else:
+        raw_datasets = raw_datasets.cast_column(
+            data_args.audio_column_name, datasets.features.Audio(sampling_rate=sample_rate)
+        )
+        resampler = None
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -451,13 +492,15 @@ def main():
     tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
     gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": "?", " <exclamationpoint>": "!"}
     gigaspeech_disfluencies = ["<other>", "<sil>"]
-    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-",
-                        "[vocalized-noise]", "_1"]
-    swb_punctuations = ["{", "}", "[", "]-", "]"]
-    earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>"]
+    swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<a_aside>", "<b_aside>", "<e_aside>",
+                        "[laughter-", "_1", "[laugh]", "[sigh]", "[cough]", "[mn]", "[breath]", "[lipsmack]",
+                        "[sneeze]", "[skip]", "[pause]", "(%hesitation)", "(%HESITATION)"]
+    swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")"]
+    earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<silence>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
-                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>",
-                       "<sil>", ""]
+                       "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", ""]
+    ignore_segments = ignore_segments + gigaspeech_disfluencies + swb_disfluencies + earnings_disfluencies
+
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
 
@@ -488,12 +531,18 @@ def main():
             # a soundfile ValueError. For now, we'll manually set these arrays to a zero array.
             # They will be filtered in the subsequent filtering stage and so are
             # explicitly ignored during training.
-            sample = {"array": np.array([0.]), "sampling_rate": sampling_rate}
+            sample = {"array": np.array([0.]), "sampling_rate": sample_rate}
+            
+        if resampler is not None:
+            speech_tensor = torch.FloatTensor(sample["array"])
+            speech_tensor = speech_tensor.squeeze()
+            speech_tensor = resampler(speech_tensor)
+            sample["array"] = speech_tensor.numpy()
+            sample["sampling_rate"] = resampler.new_freq
 
-        # Whisper RNNT model performs the audio preprocessing in the `.forward()` call
+        # For training Whisper we perform the audio preprocessing in the WhisperDataCollator
         # => we only need to supply it with the raw audio values
         batch["input_ids"] = sample["array"]
-        batch["input_lengths"] = len(sample["array"])
 
         # 'Error correction' of targets
         input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
@@ -532,20 +581,67 @@ def main():
 
         # SWB: hide the path to the private HF dataset
         if "switchboard" in dataset_name:
+            # In one conversation people speak some German phrases that are tagged as
+            # <german (( ja wohl )) > -- we remove these
+            input_str = re.sub("<[^>]*>", "", input_str)
+
+            # Remove junk tokens
             for disfluency in swb_disfluencies:
                 input_str = input_str.replace(disfluency, "")
-            # remove parenthesised text (test data only)
-            input_str = re.sub("[\(].*?[\)]", "", input_str)
-            for punctuation in swb_punctuations:
-                input_str = input_str.replace(punctuation, "")
-            # replace anomalous words with their correct transcriptions
+
+            # normalise acronyms (Fisher: u_.c_.l_.a., SWBD: u c l a)
+            input_str = input_str.replace("_.", " ")
+
+            # Replace partially pronounced words (square brackets + hyphen): westmin[ster]- to westmin- or -[go]ing to -ing
+            # Replace anomalous words (square brackets + backslack): [lemguini/linguini] to linguini
+            # Replace the combo of the two: [lem[guini]-/linguini] to lem-
+            # Example: we [ah/are] -[go]ing to westmin[ster]- for [lem[guini]-/linguini]
+            # Target: we ah -ing to westmin- for lem-
+            # Treat anomalous words first then destroy the content of all square brackets (partially pronounced words)
+
+            # First treat partially pronounced anomalous words by removing correct word: [lem[guini]-/linguini] to [lem[guini]-
+            input_str = re.sub(r"\-\/.*?\]", "-", input_str)
+
+            # Now replace anomalous words with their correct transcriptions: [lemguini/linguini] to linguini
             split_str = input_str.split("/")
             if len(split_str) > 1:
                 input_str = " ".join(
                     [" ".join([" ".join(i.split(" ")[:-1]) for i in split_str])] + [split_str[-1].split(" ")[-1]])
 
+            # Remove the trailing brackets on the start/end of words
+            processed_str = []
+            for word in input_str.split():
+                if word[0] == "[":
+                    processed_str.append(word[1:])
+                elif word[-1] == "]":
+                    processed_str.append(word[:-1])
+                else:
+                    processed_str.append(word)
+
+            # Stick the processed words back together
+            input_str = " ".join(processed_str)
+
+            # Now we can remove all words in square brackets: -[go]ing to -ing
+            input_str = re.sub(r"\-\[(.*?)\]", "-", input_str)
+
+            # westmin[ster]- to westmin-
+            input_str = re.sub(r"\[(.*?)\]\-", "-", input_str)
+
+            # tech[n]ology to tech-ology
+            input_str = re.sub(r"\[(.*?)\]", "-", input_str)
+
+            # partially pronounced words are now done!
+            # remove erroneous punctuations (curly braces, trailing square brackets, etc.)
+            for punctuation in swb_punctuations:
+                input_str = input_str.replace(punctuation, "")
+
         # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
         if "earnings22" in dataset_name:
+            # Remove the 100ms offset at the end of the sample
+            sampling_rate = sample["sampling_rate"]
+            offset = int(100 * (10 ** -3) * sampling_rate)
+            batch["input_ids"] = sample["array"][:-offset]
+            # Remove  junk tokens
             for disfluency in earnings_disfluencies:
                 input_str = input_str.replace(disfluency, "")
 
@@ -559,47 +655,67 @@ def main():
         # strip trailing spaces
         input_str = input_str.strip()
 
-        # We can't currently tokenize the dataset... we need the pre-processed text data in order to
-        # build our SPE tokenizer. Once we've defined our tokenizer, we can come back and
-        # tokenize the text. For now, just return the pre-processed text data
-        batch[text_column_name] = input_str
+        # Finally, we tokenize the processed text
+        batch["labels"] = tokenizer(input_str).input_ids
         return batch
 
     vectorized_datasets = raw_datasets.map(
         prepare_dataset,
+        remove_columns=next(iter(raw_datasets.values())).column_names,
         num_proc=num_workers,
         desc="preprocess train dataset",
     )
 
-    # filter training data with inputs shorter than min_input_length or longer than max_input_length
-    def is_audio_in_length_range(length):
-        return length > min_input_length and length < max_input_length
+    # filter training data with inputs longer than max_input_length
+    def is_audio_in_length_range(input_ids):
+        return min_input_length < len(input_ids) < max_input_length
 
     if training_args.do_train:
         vectorized_datasets["train"] = vectorized_datasets["train"].filter(
             is_audio_in_length_range,
             num_proc=num_workers,
-            input_columns=["input_lengths"],
+            input_columns=["input_ids"],
         )
 
     if max_eval_input_length is not None:
         # filter training data with inputs longer than max_input_length
-        def is_eval_audio_in_length_range(length):
-            return min_input_length < length < max_eval_input_length
+        def is_eval_audio_in_length_range(input_ids):
+            return min_input_length < len(input_ids) < max_eval_input_length
 
-        vectorized_datasets = vectorized_datasets.filter(
-            is_eval_audio_in_length_range,
+        if training_args.do_eval:
+            vectorized_datasets["eval"] = vectorized_datasets["eval"].filter(
+                is_eval_audio_in_length_range,
+                num_proc=num_workers,
+                input_columns=["input_ids"],
+            )
+
+        if training_args.do_test:
+            for split in test_split:
+                vectorized_datasets[split] = vectorized_datasets[split].filter(
+                    is_eval_audio_in_length_range,
+                    num_proc=num_workers,
+                    input_columns=["input_ids"],
+                )
+
+    # filter data with targets shorter than min_target_length or longer than max_target_length
+    def is_labels_in_length_range(labels):
+        return min_target_length < len(labels) < max_target_length
+
+    if training_args.do_train:
+        vectorized_datasets["train"] = vectorized_datasets["train"].filter(
+            is_labels_in_length_range,
             num_proc=num_workers,
-            input_columns=["input_length"],
+            input_columns=["labels"],
         )
 
-    def is_labels_non_zero(transcription):
-        return len(transcription) > 0
+    # filter data with targets shorter than 2 tokens: <s></s> -> empty sentences
+    def is_labels_greater_than_min(labels):
+        return len(labels) > 2
 
     vectorized_datasets = vectorized_datasets.filter(
-        is_labels_non_zero,
+        is_labels_greater_than_min,
         num_proc=num_workers,
-        input_columns=[text_column_name],
+        input_columns=["labels"],
     )
 
     # for large datasets it is advised to run the preprocessing on a
@@ -616,27 +732,11 @@ def main():
         model.freeze_encoder()
         logging.info("Model encoder has been frozen")
 
-    # now that we have our model and tokenizer defined, we can tokenize the text data
-    whisper_tok = whisper.tokenizer.get_tokenizer(False, task="transcribe", language="en")
-    decoding_options = whisper.decoding.DecodingOptions(task="transcribe", language="en")
-    task = whisper.decoding.DecodingTask(model, decoding_options)
-    suppress_tokens = task._get_suppress_tokens()
-
-    logits_processors = [SuppressBlank(whisper_tok), SuppressTokens(suppress_tokens), ApplyTimestampRules(whisper_tok)]
-    tokenizer = whisper_tok.tokenizer
-    tokenizer.pad_token = tokenizer.eos_token
-
-    def tokenize_transcripts(batch):
-        batch["labels"] = tokenizer(batch[text_column_name]).input_ids
-        return batch
-
-    vectorized_datasets = vectorized_datasets.map(tokenize_transcripts, num_proc=num_workers,
-                                                  desc="Tokenizing datasets...",
-                                                  remove_columns=next(iter(raw_datasets.values())).column_names)
-
     # 8. Load Metric
-    metric_wer = evaluate.load("wer")
-    metric_cer = evaluate.load("cer")
+    #metric_wer = evaluate.load("wer")
+    #metric_cer = evaluate.load("cer")
+    metric_wer = datasets.load_metric("wer")
+    metric_cer = datasets.load_metric("cer")
 
     def compute_metrics(pred):
         pred_ids = pred.predictions
@@ -650,9 +750,52 @@ def main():
 
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
-        print(pred_str)
 
-        return {"wer": wer, "cer": cer}
+        if do_lower_case:
+            pred_str = [x.lower() for x in pred_str]
+            wer_lower = metric_wer.compute(predictions=pred_str, references=label_str)
+            cer_lower = metric_cer.compute(predictions=pred_str, references=label_str)
+        else:
+            wer_lower = None
+            cer_lower = None
+
+        # replace all punctuation in the predicted string
+        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str]
+        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str]
+        wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+        cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+
+        return {"wer": wer, "cer": cer, "wer_lower": wer_lower, "cer_lower": cer_lower, "wer_norm": wer_norm, "cer_norm": cer_norm}
+
+    def compute_metrics_and_predictions(pred):
+        pred_ids = pred.predictions
+        pred.label_ids[pred.label_ids == -100] = tokenizer.eos_token_id
+
+        pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+        pred_str = [x.lstrip().strip() for x in pred_str]
+
+        # we do not want to group tokens when computing the metrics
+        label_str = tokenizer.batch_decode(pred.label_ids, skip_special_tokens=True)
+
+        wer = metric_wer.compute(predictions=pred_str, references=label_str)
+        cer = metric_cer.compute(predictions=pred_str, references=label_str)
+
+        if do_lower_case:
+            pred_str_maybe_lower = [x.lower() for x in pred_str]
+            wer_lower = metric_wer.compute(predictions=pred_str_maybe_lower, references=label_str)
+            cer_lower = metric_cer.compute(predictions=pred_str_maybe_lower, references=label_str)
+        else:
+            pred_str_maybe_lower = pred_str
+            wer_lower = None
+            cer_lower = None
+
+        # replace all punctuation in the predicted string
+        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_maybe_lower]
+        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_maybe_lower]
+        wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+        cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+
+        return {"wer": wer, "cer": cer, "wer_lower": wer_lower, "cer_lower": cer_lower, "wer_norm": wer_norm, "cer_norm": cer_norm, "pred_str": pred_str, "label_str": label_str}
 
     class WhisperTrainer(Seq2SeqTrainer):
         def _save(self, output_dir: Optional[str] = None, state_dict=None):
@@ -708,18 +851,35 @@ def main():
 #    if training_args.do_eval or training_args.do_predict:
 #        trainer.model.num_beams = 2
 
+    trainer.compute_metrics = compute_metrics_and_predictions
+
     results = {}
     if training_args.do_eval:
-        metrics = trainer.evaluate(logits_processor=logits_processors)
+        if not training_args.do_train and report_to_wandb:
+            # manually init wandb
+            wandb.init(project=data_args.wandb_project, name=training_args.run_name)
+        # Have to run this as a predict step, otherwise trainer will try to log the pred/label strings to wandb
+        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", logits_processor=logits_processors)
+        metrics = eval_results.metrics
         max_eval_samples = (
             data_args.max_eval_samples if data_args.max_eval_samples is not None else len(vectorized_datasets["eval"])
         )
         metrics["eval_samples"] = min(max_eval_samples, len(vectorized_datasets["eval"]))
+        pred_str = metrics.pop("eval_pred_str", None)
+        label_str = metrics.pop("eval_label_str", None)
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
+        if report_to_wandb:
+            metrics = {os.path.join("eval", k[len("eval") + 1:]): v for k, v in metrics.items()}
+            wandb.log(metrics)
+            write_wandb_pred(pred_str, label_str, prefix="eval")
+
     if training_args.do_predict:
+        if not training_args.do_train and not training_args.do_eval and report_to_wandb:
+            # manually init wandb
+            wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         for split in test_split:
             predict_results = trainer.predict(
                 vectorized_datasets[split], metric_key_prefix=split, logits_processor=logits_processors)
@@ -728,14 +888,16 @@ def main():
                 data_args.max_predict_samples if data_args.max_predict_samples is not None else len(vectorized_datasets[split])
             )
             metrics[f"{split}_samples"] = min(max_predict_samples, len(vectorized_datasets[split]))
+            pred_str = metrics.pop(f"{split}_pred_str", None)
+            label_str = metrics.pop(f"{split}_label_str", None)
 
             trainer.log_metrics(split, metrics)
             trainer.save_metrics(split, metrics)
 
-            if "wandb" in training_args.report_to:
-                import wandb
+            if report_to_wandb:
                 metrics = {os.path.join(split, k[len(split)+1:]): v for k, v in metrics.items()}
                 wandb.log(metrics)
+                write_wandb_pred(pred_str, label_str, prefix=split)
 
     # Write model card and (optionally) push to hub
     config_name = data_args.dataset_config_name if data_args.dataset_config_name is not None else "na"
