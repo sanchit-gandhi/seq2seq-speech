@@ -28,7 +28,6 @@ import whisper
 import sys
 import evaluate
 from dataclasses import dataclass, field
-# TODO: remove relative import of whisper -> add EnglishTextNormalizer to repo
 from whisper.normalizers.english import EnglishTextNormalizer
 
 from typing import Optional, Dict, Union, List
