@@ -28,6 +28,8 @@ import whisper
 import sys
 import evaluate
 from dataclasses import dataclass, field
+# TODO: remove relative import of whisper -> add EnglishTextNormalizer to repo
+from whisper.normalizers.english import EnglishTextNormalizer
 
 from typing import Optional, Dict, Union, List
 
@@ -295,17 +297,29 @@ class DataTrainingArguments:
     )
 
 
-def write_wandb_pred(pred_str, label_str, prefix="eval"):
-    # convert str data to a wandb compatible format
-    str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
-    # we'll log all predictions for the last epoch
-    wandb.log(
-        {
-            f"{prefix}/predictions": wandb.Table(
-                columns=["label_str", "pred_str"], data=str_data
-            )
-        },
-    )
+def write_wandb_pred(pred_str, label_str, norm_str=None, prefix="eval"):
+    if norm_str is None:
+        # convert str data to a wandb compatible format
+        str_data = [[label_str[i], pred_str[i]] for i in range(len(pred_str))]
+        # we'll log all predictions for the last epoch
+        wandb.log(
+            {
+                f"{prefix}/predictions": wandb.Table(
+                    columns=["label_str", "pred_str"], data=str_data
+                )
+            },
+        )
+    else:
+        # convert str data to a wandb compatible format
+        str_data = [[label_str[i], pred_str[i], norm_str[i]] for i in range(len(pred_str))]
+        # we'll log all predictions for the last epoch
+        wandb.log(
+            {
+                f"{prefix}/predictions": wandb.Table(
+                    columns=["label_str", "pred_str", "norm_str"], data=str_data
+                )
+            },
+        )
 
 
 def WhisperDataCollator(features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
@@ -744,6 +758,8 @@ def main():
     metric_wer = datasets.load_metric("wer")
     metric_cer = datasets.load_metric("cer")
 
+    normalizer = EnglishTextNormalizer()
+
     def compute_metrics(pred):
         pred_ids = pred.predictions
         pred.label_ids[pred.label_ids == -100] = tokenizer.eos_token_id
@@ -757,18 +773,12 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        pred_str_lower = [x.lower() for x in pred_str]
-        label_str_lower = [x.lower() for x in label_str]
-        wer_lower = metric_wer.compute(predictions=pred_str_lower, references=label_str_lower)
-        cer_lower = metric_cer.compute(predictions=pred_str_lower, references=label_str_lower)
-
-        # replace all punctuation in the predicted string
-        normalized_pred_str = [re.sub(punctuation_to_remove_regex, " ", input_str) for input_str in pred_str_lower]
-        normalized_label_str = [re.sub(punctuation_to_remove_regex, " ", input_str) for input_str in label_str_lower]
+        normalized_pred_str = [normalizer(input_str) for input_str in pred_str]
+        normalized_label_str = [normalizer(input_str) for input_str in label_str]
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
 
-        return {"wer": wer, "cer": cer, "wer_lower": wer_lower, "cer_lower": cer_lower, "wer_norm": wer_norm, "cer_norm": cer_norm}
+        return {"wer": wer, "cer": cer, "wer_norm": wer_norm, "cer_norm": cer_norm}
 
     def compute_metrics_and_predictions(pred):
         pred_ids = pred.predictions
@@ -783,18 +793,12 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        pred_str_lower = [x.lower() for x in pred_str]
-        label_str_lower = [x.lower() for x in label_str]
-        wer_lower = metric_wer.compute(predictions=pred_str_lower, references=label_str_lower)
-        cer_lower = metric_cer.compute(predictions=pred_str_lower, references=label_str_lower)
-
-        # replace all punctuation in the predicted string
-        normalized_pred_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in pred_str_lower]
-        normalized_label_str = [re.sub(r'[,.:;@#?!&$\-\"]+\ *', " ", input_str) for input_str in label_str_lower]
+        normalized_pred_str = [normalizer(input_str) for input_str in pred_str]
+        normalized_label_str = [normalizer(input_str) for input_str in label_str]
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
 
-        return {"wer": wer, "cer": cer, "wer_lower": wer_lower, "cer_lower": cer_lower, "wer_norm": wer_norm, "cer_norm": cer_norm, "pred_str": pred_str, "label_str": label_str}
+        return {"wer": wer, "cer": cer, "wer_norm": wer_norm, "cer_norm": cer_norm, "pred_str": pred_str, "label_str": label_str, "norm_str": normalized_pred_str}
 
     class WhisperTrainer(Seq2SeqTrainer):
         def _save(self, output_dir: Optional[str] = None, state_dict=None):
@@ -865,6 +869,7 @@ def main():
         )
         metrics["eval_samples"] = min(max_eval_samples, len(vectorized_datasets["eval"]))
         pred_str = metrics.pop("eval_pred_str", None)
+        norm_str = metrics.pop("eval_norm_str", None)
         label_str = metrics.pop("eval_label_str", None)
 
         trainer.log_metrics("eval", metrics)
@@ -873,7 +878,7 @@ def main():
         if report_to_wandb:
             metrics = {os.path.join("eval", k[len("eval") + 1:]): v for k, v in metrics.items()}
             wandb.log(metrics)
-            write_wandb_pred(pred_str, label_str, prefix="eval")
+            write_wandb_pred(pred_str, label_str, norm_str=norm_str, prefix="eval")
 
     if training_args.do_predict:
         if not training_args.do_train and not training_args.do_eval and report_to_wandb:
@@ -888,6 +893,7 @@ def main():
             )
             metrics[f"{split}_samples"] = min(max_predict_samples, len(vectorized_datasets[split]))
             pred_str = metrics.pop(f"{split}_pred_str", None)
+            norm_str = metrics.pop(f"{split}_norm_str", None)
             label_str = metrics.pop(f"{split}_label_str", None)
 
             trainer.log_metrics(split, metrics)
@@ -896,7 +902,7 @@ def main():
             if report_to_wandb:
                 metrics = {os.path.join(split, k[len(split)+1:]): v for k, v in metrics.items()}
                 wandb.log(metrics)
-                write_wandb_pred(pred_str, label_str, prefix=split)
+                write_wandb_pred(pred_str, label_str, norm_str=norm_str, prefix=split)
 
     # Write model card and (optionally) push to hub
     config_name = data_args.dataset_config_name if data_args.dataset_config_name is not None else "na"
