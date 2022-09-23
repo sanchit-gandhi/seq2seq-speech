@@ -20,6 +20,12 @@
       <sshConfig host="35.204.185.189" id="4b5e0687-8532-48b2-ab54-47cf488b8282" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="patrick-tpu" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
         <option name="customName" value="patrick-tpu" />
       </sshConfig>
+      <sshConfig host="34.90.247.170" id="2e8cde5a-43b5-4c20-b6aa-61724fe6fb61" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="sanchit-a100-2" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
+        <option name="customName" value="sanchit-a100-2" />
+      </sshConfig>
+      <sshConfig host="35.204.232.202" id="46b86f56-e580-4409-b3d1-ae6c02fa95b5" keyPath="$PROJECT_DIR$/../.ssh/google_compute_engine" port="22" customName="sanchit-a100" nameFormat="CUSTOM" username="sanchit_huggingface_co" useOpenSSHConfig="true">
+        <option name="customName" value="sanchit-a100" />
+      </sshConfig>
     </configs>
   </component>
 </project>

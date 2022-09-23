@@ -9,6 +9,20 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="sanchit-a100">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="sanchit-a100-2">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/sanchit_huggingface_co/seq2seq-speech" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="special">
         <serverdata>
           <mappings>
