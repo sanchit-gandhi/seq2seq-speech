@@ -2,7 +2,7 @@
 CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
 	--model_name_or_path="small.en" \
 	--dataset_name="librispeech_asr" \
-	--num_train_epochs="2" \
+	--max_steps="10000" \
 	--dataset_config_name="all" \
 	--train_split_name="train.clean.100+train.clean.360+train.other.500" \
 	--eval_split_name="validation.clean" \
@@ -11,21 +11,23 @@ CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
 	--output_dir="./" \
 	--run_name="whisper-ls-960h" \
 	--wandb_project="whisper" \
-	--per_device_train_batch_size="8" \
-	--per_device_eval_batch_size="8" \
+	--per_device_train_batch_size="64" \
+	--per_device_eval_batch_size="32" \
 	--logging_steps="50" \
 	--learning_rate="1e-4" \
 	--warmup_steps="500" \
 	--report_to="wandb" \
 	--preprocessing_num_workers="16" \
 	--evaluation_strategy="steps" \
-	--eval_steps="10000" \
+	--eval_steps="2500" \
 	--save_strategy="steps" \
-	--save_steps="20000" \
+	--save_steps="2500" \
 	--generation_max_length="256" \
 	--length_column_name="input_lengths" \
-	--push_to_hub="False" \
+	--do_lower_case="True" \
 	--group_by_length \
+	--freeze_encoder \
+	--fp16 \
 	--overwrite_output_dir \
 	--do_train \
 	--do_eval \
