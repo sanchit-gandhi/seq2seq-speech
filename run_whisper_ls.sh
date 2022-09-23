@@ -2,33 +2,32 @@
 CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
 	--model_name_or_path="small.en" \
 	--dataset_name="librispeech_asr" \
-	--num_train_epochs="1" \
-	--evaluation_strategy="epoch" \
+	--num_train_epochs="2" \
 	--dataset_config_name="all" \
-	--train_split_name="train.100.clean" \
+	--train_split_name="train.clean.100+train.clean.360+train.other.500" \
 	--eval_split_name="validation.clean" \
 	--test_split_name="validation.other+test.clean+test.other" \
 	--text_column_name="text" \
-	--output_dir="./output_dir" \
-	--run_name="whisper-ls-small.en" \
-	--wandb_project="whisper-dummy" \
+	--output_dir="./" \
+	--run_name="whisper-ls-960h" \
+	--wandb_project="whisper" \
 	--per_device_train_batch_size="8" \
-	--per_device_eval_batch_size="4" \
-	--logging_steps="1" \
+	--per_device_eval_batch_size="8" \
+	--logging_steps="50" \
 	--learning_rate="1e-4" \
-	--warmup_steps="3" \
+	--warmup_steps="500" \
 	--report_to="wandb" \
-	--push_to_hub="False" \
-	--preprocessing_num_workers="4" \
-	--evaluation_strategy="epoch" \
-	--max_eval_samples="8" \
-	--max_predict_samples="8" \
+	--preprocessing_num_workers="16" \
+	--evaluation_strategy="steps" \
+	--eval_steps="10000" \
+	--save_strategy="steps" \
+	--save_steps="20000" \
+	--generation_max_length="256" \
 	--length_column_name="input_lengths" \
-	--save_strategy="no" \
+	--push_to_hub="False" \
 	--group_by_length \
 	--overwrite_output_dir \
-	--freeze_encoder \
+	--do_train \
 	--do_eval \
 	--do_predict \
 	--predict_with_generate \
-	--generation_max_length=128 \
