@@ -14,7 +14,7 @@ python run_flax_speech_recognition_seq2seq.py \
         --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="2" \
-        --learning_rate="1e-4" \
+        --learning_rate="5e-4" \
         --warmup_steps="500" \
         --logging_steps="25" \
         --max_steps="50000" \
