@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+python run_flax_speech_recognition_ctc.py \
+        --model_name_or_path="sanchit-gandhi/flax-wav2vec2-ctc-voxpopuli-black-box" \
+        --tokenizer_name="sanchit-gandhi/flax-wav2vec2-ctc-voxpopuli-black-box" \
+        --dataset_name="polinaeterna/voxpopuli" \
+        --dataset_config_name="en" \
+        --train_split_name="train" \
+        --eval_split_name="validation" \
+        --test_split_name="test" \
+        --text_column_name="normalized_text" \
+        --output_dir="./flax-wav2vec2-ctc-voxpopuli-black-box" \
+        --wandb_project="voxpopuli" \
+        --wandb_name="flax-wav2vec2-ctc-voxpopuli-black-box" \
+        --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
+        --max_steps="50000" \
+        --save_steps="10000" \
+        --eval_steps="10000" \
+        --learning_rate="3e-4" \
+        --logging_steps="25" \
+        --warmup_steps="5000" \
+        --preprocessing_num_workers="1" \
+        --per_device_eval_batch_size="1" \
+        --do_train \
+        --do_eval \
+        --do_predict \
+        --overwrite_output_dir \
+        --gradient_checkpointing \
+        --freeze_feature_encoder \
+        --push_to_hub \
+        --use_auth_token

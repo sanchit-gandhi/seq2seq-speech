@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+CUDA_VISIBLE_DEVICES=0 python run_speech_recognition_whisper.py \
+	--model_name_or_path="medium.en" \
+  --dataset_name="mozilla-foundation/common_voice_9_0" \
+  --dataset_config_name="en" \
+  --train_split_name="train" \
+  --eval_split_name="validation" \
+  --test_split_name="test" \
+  --text_column_name="sentence" \
+	--max_steps="2500" \
+	--output_dir="./" \
+	--run_name="whisper-cv9" \
+	--wandb_project="whisper" \
+	--per_device_train_batch_size="64" \
+	--per_device_eval_batch_size="16" \
+	--logging_steps="25" \
+	--learning_rate="1e-4" \
+	--warmup_steps="500" \
+	--report_to="wandb" \
+	--preprocessing_num_workers="16" \
+	--evaluation_strategy="steps" \
+	--eval_steps="500" \
+	--save_strategy="steps" \
+	--save_steps="500" \
+	--generation_max_length="128" \
+	--length_column_name="input_lengths" \
+	--do_lower_case="False" \
+	--push_to_hub="False" \
+	--max_eval_duration_in_seconds="20" \
+	--gradient_checkpointing \
+	--group_by_length \
+	--freeze_encoder \
+	--fp16 \
+	--overwrite_output_dir \
+	--do_train \
+	--do_eval \
+	--do_predict \
+	--predict_with_generate \
+	--use_auth_token
