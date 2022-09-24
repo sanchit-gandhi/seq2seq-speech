@@ -36,6 +36,7 @@ import torch
 import datasets
 from datasets import DatasetDict, load_dataset
 import transformers
+from torch import nn
 from transformers import (
     HfArgumentParser,
     Seq2SeqTrainingArguments,
@@ -95,6 +96,10 @@ class ModelArguments:
     use_adam8bit: bool = field(
         default=False,
         metadata={"help": "Whether to use bitsandbytes 8bit AdamW optimiser."}
+    )
+    dropout_rate: float = field(
+        default=0.0,
+        metadata={"help": "The dropout ratio for all dropout layers (default=0)."}
     )
 
 
@@ -417,8 +422,27 @@ def main():
     set_seed(training_args.seed)
 
     # load the model 
-    model = whisper.load_model(model_args.model_name_or_path)
-    
+    model = whisper.load_model(model_args.model_name_or_path, dropout_rate=model_args.dropout_rate)
+
+    # set the dropout for the MLP layers -> we do this here as the MLP layers are written as a 'sequential'
+    # so changing the modelling code gives mis-matches in the state-dict
+    for block_idx in range(len(model.encoder.blocks)):
+        mlp_layer = model.encoder.blocks[block_idx].mlp
+        # going very verbose to explain what we're doing here!
+        fc1 = mlp_layer[0]
+        act_fn = mlp_layer[1]
+        dropout = nn.Dropout(p=model_args.dropout_rate)
+        fc2 = mlp_layer[2]
+        model.encoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
+
+    for block_idx in range(len(model.decoder.blocks)):
+        mlp_layer = model.decoder.blocks[block_idx].mlp
+        fc1 = mlp_layer[0]
+        act_fn = mlp_layer[1]
+        dropout = nn.Dropout(p=model_args.dropout_rate)
+        fc2 = mlp_layer[2]
+        model.decoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
+
     # load the tokenizer
     whisper_tok = whisper.tokenizer.get_tokenizer(False, task="transcribe", language="en")
     decoding_options = whisper.decoding.DecodingOptions(task="transcribe", language="en")

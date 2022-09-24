@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
-	--model_name_or_path="small.en" \
+CUDA_VISIBLE_DEVICES=6 python run_speech_recognition_whisper.py \
+	--model_name_or_path="tiny.en" \
 	--dataset_name="hf-internal-testing/librispeech_asr_dummy" \
 	--num_train_epochs="1" \
 	--evaluation_strategy="epoch" \
@@ -28,7 +28,9 @@ CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
 	--group_by_length \
 	--overwrite_output_dir \
 	--freeze_encoder \
+	--do_train \
 	--do_eval \
 	--do_predict \
 	--predict_with_generate \
+	--dropout_rate="0.5" \
 	--generation_max_length=64 \
