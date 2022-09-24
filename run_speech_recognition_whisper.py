@@ -26,7 +26,6 @@ import string
 import torchaudio
 import whisper
 import sys
-import evaluate
 from dataclasses import dataclass, field
 
 from typing import Optional, Dict, Union, List
@@ -242,7 +241,7 @@ class DataTrainingArguments:
         },
     )
     min_target_length: Optional[int] = field(
-        default=2,
+        default=0,
         metadata={
             "help": "The minimum total sequence length for target text after tokenization. Sequences shorter "
                     "than this will be filtered."
@@ -308,38 +307,58 @@ def write_wandb_pred(pred_str, label_str, prefix="eval"):
     )
 
 
-def WhisperDataCollator(features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+def transform(array):
+    """Static function which:
+        1. Pads/trims a list of audio arrays to a max length of 30s
+        2. Computes log-mel filter coefficients from padded/trimmed audio sequences
+        Inputs:
+            array: list of audio arrays
+        Returns:
+            input_ids: torch.tensor of log-mel filter bank coefficients
     """
-    Data collator that will dynamically pad the inputs received.
-    Since Whisper models don't have a HF processor defined (feature extractor + tokenizer), we'll pad by hand...
-    The padding idx is arbitrary: we provide the model with the input lengths and label lengths, from which
-    all the relevant padding information is inferred. Thus, we'll use the default np.pad padding idx (0).
+    padded_input = whisper.pad_or_trim(np.asarray(array, dtype=np.float32))
+    input_ids = whisper.log_mel_spectrogram(padded_input)
+    return input_ids
+
+
+@dataclass
+class WhisperDataCollatorWithPadding:
     """
-    # split inputs and labels since they have to be of different lengths
-    # and need different padding methods
-    input_ids = [feature["input_ids"] for feature in features]
-    labels = [feature["labels"] for feature in features]
+    Data collator that dynamically pads the audio inputs received. An EOS token is appended to the labels sequences.
+    They are then dynamically padded to max length.
+    Args:
+        eos_token_id (`int`)
+            The end-of-sentence token for the Whisper tokenizer. Ensure to set for sequences to terminate before
+            generation max length.
+    """
 
-    def transform(array):
-        padded_input = whisper.pad_or_trim(np.asarray(array, dtype=np.float32))
-        input_ids = whisper.log_mel_spectrogram(padded_input)
-        return input_ids
+    eos_token_id: int
 
-    # first, pad the audio inputs to max_len
-#    input_ids = np.asarray([transform(input_val) for input_val in input_ids], dtype=np.float32)
-    input_ids = torch.concat([transform(input_val)[None, :] for input_val in input_ids])
+    def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+        """
+        Since Whisper models don't have a HF processor defined (feature extractor + tokenizer), we'll pad by hand...
+        """
+        # split inputs and labels since they have to be of different lengths
+        # and need different padding methods
+        input_ids = [feature["input_ids"] for feature in features]
+        labels = [feature["labels"] for feature in features]
 
-    # next, pad the target labels to max_len
-    label_lengths = [len(lab) for lab in labels]
-    max_label_len = max(label_lengths)
-    labels = [np.pad(lab, (0, max_label_len - lab_len), 'constant', constant_values=-100) for lab, lab_len in zip(labels, label_lengths)]
+        # first, pad the audio inputs to max_len
+        input_ids = torch.concat([transform(input_val)[None, :] for input_val in input_ids])
 
-    batch = {"labels": labels}
-    batch = {k: torch.tensor(np.array(v), requires_grad=False) for k, v in batch.items()}
+        # next, append the eos token to our sequence of labels
+        labels = [lab + [self.eos_token_id] for lab in labels]
+        # finally, pad the target labels to max_len
+        label_lengths = [len(lab) for lab in labels]
+        max_label_len = max(label_lengths)
+        labels = [np.pad(lab, (0, max_label_len - lab_len), 'constant', constant_values=-100) for lab, lab_len in zip(labels, label_lengths)]
 
-    batch["input_ids"] = input_ids
+        batch = {"labels": labels}
+        batch = {k: torch.tensor(np.array(v), requires_grad=False) for k, v in batch.items()}
 
-    return batch
+        batch["input_ids"] = input_ids
+
+        return batch
 
 
 def main():
@@ -488,9 +507,6 @@ def main():
     text_column_name = data_args.text_column_name
     do_lower_case = data_args.do_lower_case
     dataset_name = data_args.dataset_name
-
-    punctuation = string.punctuation.replace("'", "")
-    punctuation_to_remove_regex = f'[{"".join(punctuation)}]'
 
     # Define tokens to ignore/replace
     tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
@@ -695,7 +711,7 @@ def main():
                 input_columns=["input_lengths"],
             )
 
-        if training_args.do_test:
+        if training_args.do_predict:
             for split in test_split:
                 vectorized_datasets[split] = vectorized_datasets[split].filter(
                     is_eval_audio_in_length_range,
@@ -703,7 +719,7 @@ def main():
                     input_columns=["input_lengths"],
                 )
 
-    # filter data with targets shorter than min_target_length or longer than max_target_length
+    # filter training data with targets shorter than min_target_length or longer than max_target_length
     def is_labels_in_length_range(labels):
         return min_target_length < len(labels) < max_target_length
 
@@ -714,9 +730,9 @@ def main():
             input_columns=["labels"],
         )
 
-    # filter data with targets shorter than 2 tokens: <s></s> -> empty sentences
+    # filter data with targets empty sentences
     def is_labels_greater_than_min(labels):
-        return len(labels) > 2
+        return len(labels) > 0
 
     vectorized_datasets = vectorized_datasets.filter(
         is_labels_greater_than_min,
@@ -786,6 +802,9 @@ def main():
             # Good practice: save your training arguments together with the trained model
             torch.save(self.args, os.path.join(output_dir, "training_args.bin"))
 
+    # Define data collator
+    whisper_data_collator = WhisperDataCollatorWithPadding(eos_token_id=tokenizer.eos_token_id)
+
     # Initialize Trainer
     trainer = WhisperTrainer(
         model=model,
@@ -793,7 +812,7 @@ def main():
         compute_metrics=compute_metrics,
         train_dataset=vectorized_datasets['train'] if training_args.do_train else None,
         eval_dataset=vectorized_datasets['eval'] if training_args.do_eval else None,
-        data_collator=WhisperDataCollator,
+        data_collator=whisper_data_collator,
     )
 
     # 8. Finally, we can start training
