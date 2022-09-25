@@ -422,7 +422,10 @@ def main():
     set_seed(training_args.seed)
 
     # load the model 
-    model = whisper.load_model(model_args.model_name_or_path, dropout_rate=model_args.dropout_rate)
+    if os.path.isfile(model_args.model_name_or_path):
+        model = whisper.Whisper.load_trained(model_args.model_name_or_path)
+    else:
+        model = whisper.load_model(model_args.model_name_or_path, dropout_rate=model_args.dropout_rate)
 
     # set the dropout for the MLP layers -> we do this here as the MLP layers are written as a 'sequential'
     # so changing the modelling code gives mis-matches in the state-dict
