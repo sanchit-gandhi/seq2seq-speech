@@ -93,6 +93,10 @@ class ModelArguments:
         default=False,
         metadata={"help": "Freeze the acoustic encoder of the model. Recommend when fine-tuning on small datasets."}
     )
+    no_logits_processor: bool = field(
+        default=False,
+        metadata={"help": "Disable the logits processors for generation."},
+    )
     use_adam8bit: bool = field(
         default=False,
         metadata={"help": "Whether to use bitsandbytes 8bit AdamW optimiser."}
@@ -456,6 +460,11 @@ def main():
     suppress_tokens = task._get_suppress_tokens()
 
     logits_processors = [SuppressBlank(whisper_tok), SuppressTokens(suppress_tokens), ApplyTimestampRules(whisper_tok)]
+    
+    if model_args.no_logits_processor:
+        # disable logits processors
+        logits_processors = []
+
     tokenizer = whisper_tok.tokenizer
     tokenizer.pad_token = tokenizer.eos_token
 
