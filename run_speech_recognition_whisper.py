@@ -429,14 +429,17 @@ def main():
 
     # set the dropout for the MLP layers -> we do this here as the MLP layers are written as a 'sequential'
     # so changing the modelling code gives mis-matches in the state-dict
-    for block_idx in range(len(model.encoder.blocks)):
-        mlp_layer = model.encoder.blocks[block_idx].mlp
-        # going very verbose to explain what we're doing here!
-        fc1 = mlp_layer[0]
-        act_fn = mlp_layer[1]
-        dropout = nn.Dropout(p=model_args.dropout_rate)
-        fc2 = mlp_layer[2]
-        model.encoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
+
+    if not model_args.freeze_encoder:
+        # only apply dropout when training the encoder
+        for block_idx in range(len(model.encoder.blocks)):
+            mlp_layer = model.encoder.blocks[block_idx].mlp
+            # going very verbose to explain what we're doing here!
+            fc1 = mlp_layer[0]
+            act_fn = mlp_layer[1]
+            dropout = nn.Dropout(p=model_args.dropout_rate)
+            fc2 = mlp_layer[2]
+            model.encoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
 
     for block_idx in range(len(model.decoder.blocks)):
         mlp_layer = model.decoder.blocks[block_idx].mlp
