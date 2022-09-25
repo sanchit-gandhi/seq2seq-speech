@@ -97,6 +97,14 @@ class ModelArguments:
         default=False,
         metadata={"help": "Disable the logits processors for generation."},
     )
+    num_beams: int = field(
+        default=1,
+        metadata={"help": "Number of beams for evaluation."},
+    )
+    length_penalty: float = field(
+        default=1.0,
+        metadata={"help": "Length penalty for evaluation."},
+    )
     use_adam8bit: bool = field(
         default=False,
         metadata={"help": "Whether to use bitsandbytes 8bit AdamW optimiser."}
@@ -329,6 +337,19 @@ def transform(array):
     input_ids = whisper.log_mel_spectrogram(padded_input)
     return input_ids
 
+def to_mel_to_pad(array):
+    """Static function which:
+        1. Computes log-mel filter coefficients from padded/trimmed audio sequences
+        2. Pads/trims a list of audio arrays to a max length of 30s
+        Inputs:
+            array: list of audio arrays
+        Returns:
+            input_ids: torch.tensor of log-mel filter bank coefficients
+    """
+    mels = whisper.log_mel_spectrogram(np.asarray(array, dtype=np.float32))
+    input_ids = whisper.pad_or_trim(mels, 3000)
+    return input_ids
+
 
 @dataclass
 class WhisperDataCollatorWithPadding:
@@ -353,7 +374,7 @@ class WhisperDataCollatorWithPadding:
         labels = [feature["labels"] for feature in features]
 
         # first, pad the audio inputs to max_len
-        input_ids = torch.concat([transform(input_val)[None, :] for input_val in input_ids])
+        input_ids = torch.concat([to_mel_to_pad(input_val)[None, :] for input_val in input_ids])
 
         # next, append the eos token to our sequence of labels
         labels = [lab + [self.eos_token_id] for lab in labels]
@@ -894,7 +915,7 @@ def main():
             # manually init wandb
             wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         # Have to run this as a predict step, otherwise trainer will try to log the pred/label strings to wandb
-        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", logits_processor=logits_processors)
+        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", logits_processor=logits_processors, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
         metrics = eval_results.metrics
         max_eval_samples = (
             data_args.max_eval_samples if data_args.max_eval_samples is not None else len(vectorized_datasets["eval"])
@@ -917,7 +938,7 @@ def main():
             wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         for split in test_split:
             predict_results = trainer.predict(
-                vectorized_datasets[split], metric_key_prefix=split, logits_processor=logits_processors)
+                vectorized_datasets[split], metric_key_prefix=split, logits_processor=logits_processors, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
             metrics = predict_results.metrics
             max_predict_samples = (
                 data_args.max_predict_samples if data_args.max_predict_samples is not None else len(vectorized_datasets[split])
