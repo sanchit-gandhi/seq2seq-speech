@@ -324,7 +324,7 @@ def write_wandb_pred(pred_str, label_str, prefix="eval"):
     )
 
 
-def transform(array):
+def to_pad_to_mel(array):
     """Static function which:
         1. Pads/trims a list of audio arrays to a max length of 30s
         2. Computes log-mel filter coefficients from padded/trimmed audio sequences
@@ -374,7 +374,7 @@ class WhisperDataCollatorWithPadding:
         labels = [feature["labels"] for feature in features]
 
         # first, pad the audio inputs to max_len
-        input_ids = torch.concat([to_mel_to_pad(input_val)[None, :] for input_val in input_ids])
+        input_ids = torch.concat([to_pad_to_mel(input_val)[None, :] for input_val in input_ids])
 
         # next, append the eos token to our sequence of labels
         labels = [lab + [self.eos_token_id] for lab in labels]
