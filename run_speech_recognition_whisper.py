@@ -95,10 +95,6 @@ class ModelArguments:
         default=False,
         metadata={"help": "Freeze the acoustic encoder of the model. Recommend when fine-tuning on small datasets."}
     )
-    no_logits_processor: bool = field(
-        default=False,
-        metadata={"help": "Disable the logits processors for generation."},
-    )
     num_beams: int = field(
         default=1,
         metadata={"help": "Number of beams for evaluation."},
@@ -115,29 +111,6 @@ class ModelArguments:
         default=0.0,
         metadata={"help": "The dropout ratio for all dropout layers (default=0)."}
     )
-
-
-class SuppressBlank:
-    def __init__(self, tokenizer, sample_begin: int = 2):
-        self.tokenizer = tokenizer
-        self.sample_begin = sample_begin
-
-    def __call__(self, input_ids, scores):
-        tokens = input_ids
-        logits = scores
-        if tokens.shape[1] == self.sample_begin:
-            logits[:, self.tokenizer.encode(" ") + [self.tokenizer.eot]] = -np.inf
-        return logits
-
-
-class SuppressTokens:
-    def __init__(self, suppress_tokens):
-        self.suppress_tokens = list(suppress_tokens)
-
-    def __call__(self, input_ids, scores):
-        logits = scores
-        logits[:, self.suppress_tokens] = -np.inf
-        return logits
 
 
 @dataclass
@@ -297,6 +270,7 @@ def to_pad_to_mel(array):
     input_ids = whisper.log_mel_spectrogram(padded_input)
     return input_ids
 
+
 def to_mel_to_pad(array):
     """Static function which:
         1. Computes log-mel filter coefficients from padded/trimmed audio sequences
@@ -437,10 +411,6 @@ def main():
 
     # load the tokenizer
     whisper_tok = whisper.tokenizer.get_tokenizer(False, task="transcribe", language="en")
-    decoding_options = whisper.decoding.DecodingOptions(task="transcribe", language="en")
-    task = whisper.decoding.DecodingTask(model, decoding_options)
-    suppress_tokens = task._get_suppress_tokens()
-
     tokenizer = whisper_tok.tokenizer
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -790,8 +760,8 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        normalized_pred_str = [normalizer(input_str) for input_str in pred_str]
-        normalized_label_str = [normalizer(input_str) for input_str in label_str]
+        normalized_pred_str = [normalizer(str(input_str)) for input_str in pred_str]
+        normalized_label_str = [normalizer(str(input_str)) for input_str in label_str]
 
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
@@ -811,8 +781,8 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        normalized_pred_str = [normalizer(input_str) for input_str in pred_str]
-        normalized_label_str = [normalizer(input_str) for input_str in label_str]
+        normalized_pred_str = [normalizer(str(input_str)) for input_str in pred_str]
+        normalized_label_str = [normalizer(str(input_str)) for input_str in label_str]
 
         wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
         cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
