@@ -19,6 +19,7 @@ Fine-tuning OpenAI Whisper models for speech recognition.
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 # flake8: noqa: E501
 import logging
+import tempfile
 import os
 import re
 import string
@@ -409,7 +410,26 @@ def main():
 
     # load the model 
     if os.path.isfile(model_args.model_name_or_path):
-        model = whisper.Whisper.load_trained(model_args.model_name_or_path)
+        checkpoint = torch.load(model_args.model_name_or_path)
+        need_to_rewrite_checkpoint = any(k.startswith("decoder.blocks") and ".mlp.5" in k for k in Checkpoint.keys())
+        if need_to_rewrite_checkpoint:
+            new_checkpoint = {}
+            for k, v in checkpoint.items():
+                if k.startswith("decoder.blocks") and "mlp" in k.split("."):
+                    if int(k.split(".mlp.")[-1].split(".")[0]) in [2, 4]:
+                        continue
+                    elif int(k.split(".mlp.")[-1].split(".")[0]) == 3:
+                        k = k.replace(".mlp.3", ".mlp.2")
+
+                new_checkpoint[k] = v
+
+            with tempfile.TemporaryDirectory() as tmp:
+                file = os.path.join(tmp, "model.pt")
+                torch.save(new_checkpoint, file)
+                model = whisper.Whisper.load_trained(file)
+        else:
+            model = whisper.Whisper.load_trained(model_args.model_name_or_path)
+        del checkpoint
     else:
         model = whisper.load_model(model_args.model_name_or_path, dropout_rate=model_args.dropout_rate)
 
@@ -431,9 +451,10 @@ def main():
         mlp_layer = model.decoder.blocks[block_idx].mlp
         fc1 = mlp_layer[0]
         act_fn = mlp_layer[1]
-        dropout = nn.Dropout(p=model_args.dropout_rate)
+        dropout_1 = nn.Dropout(p=model_args.dropout_rate)
         fc2 = mlp_layer[2]
-        model.decoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
+        dropout_2 = nn.Dropout(p=model_args.dropout_rate)
+        model.decoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout_1, fc2, dropout_2)
 
     # load the tokenizer
     whisper_tok = whisper.tokenizer.get_tokenizer(False, task="transcribe", language="en")
@@ -839,6 +860,7 @@ def main():
     # make sure model uses 50257 as BOS
     bos = tokenizer("<|startoftranscript|>").input_ids[0]
     model.config.decoder_start_token_id = bos
+    model.config.forced_bos_token_id = t_stamp
 
     # Initialize Trainer
     trainer = WhisperTrainer(
