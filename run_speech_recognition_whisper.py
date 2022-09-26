@@ -49,6 +49,8 @@ from transformers.utils.versions import require_version
 
 import wandb
 
+from whisper.normalizers.english import EnglishTextNormalizer
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
 
@@ -116,7 +118,7 @@ class ModelArguments:
 
 
 class SuppressBlank:
-    def __init__(self, tokenizer, sample_begin: int = 1):
+    def __init__(self, tokenizer, sample_begin: int = 2):
         self.tokenizer = tokenizer
         self.sample_begin = sample_begin
 
@@ -135,48 +137,6 @@ class SuppressTokens:
     def __call__(self, input_ids, scores):
         logits = scores
         logits[:, self.suppress_tokens] = -np.inf
-        return logits
-
-
-class ApplyTimestampRules:
-    def __init__(
-        self, tokenizer, sample_begin: int = 1, max_initial_timestamp_index: Optional[int] = None
-    ):
-        self.tokenizer = tokenizer
-        self.sample_begin = sample_begin
-        self.max_initial_timestamp_index = max_initial_timestamp_index
-
-    def __call__(self, input_ids, scores):
-        tokens = input_ids
-        logits = scores
-        # suppress <|notimestamps|> which is handled by without_timestamps
-        if self.tokenizer.no_timestamps is not None:
-            logits[:, self.tokenizer.no_timestamps] = -np.inf
-
-        # timestamps have to appear in pairs, except directly before EOT; mask logits accordingly
-        for k in range(tokens.shape[0]):
-            seq = [t for t in tokens[k, self.sample_begin :].tolist()]
-            last_was_timestamp = len(seq) >= 1 and seq[-1] >= self.tokenizer.timestamp_begin
-            penultimate_was_timestamp = len(seq) < 2 or seq[-2] >= self.tokenizer.timestamp_begin
-
-            if last_was_timestamp:
-                if penultimate_was_timestamp:  # has to be non-timestamp
-                    logits[k, self.tokenizer.timestamp_begin :] = -np.inf
-                else:  # cannot be normal text tokens
-                    logits[k, : self.tokenizer.eot] = -np.inf
-
-        # apply the `max_initial_timestamp` option
-        if tokens.shape[1] == self.sample_begin and self.max_initial_timestamp_index is not None:
-            last_allowed = self.tokenizer.timestamp_begin + self.max_initial_timestamp_index
-            logits[:, last_allowed + 1 :] = -np.inf
-
-        # if sum of probability over timestamps is above any other token, sample timestamp
-        logprobs = torch.nn.functional.log_softmax(logits.float(), dim=-1)
-        for k in range(tokens.shape[0]):
-            timestamp_logprob = logprobs[k, self.tokenizer.timestamp_begin :].logsumexp(dim=-1)
-            max_text_token_logprob = logprobs[k, : self.tokenizer.timestamp_begin].max()
-            if timestamp_logprob > max_text_token_logprob:
-                logits[k, : self.tokenizer.timestamp_begin] = -np.inf
         return logits
 
 
@@ -363,6 +323,7 @@ class WhisperDataCollatorWithPadding:
     """
 
     eos_token_id: int
+    time_stamp_token_id: int
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         """
@@ -377,7 +338,7 @@ class WhisperDataCollatorWithPadding:
         input_ids = torch.concat([to_pad_to_mel(input_val)[None, :] for input_val in input_ids])
 
         # next, append the eos token to our sequence of labels
-        labels = [lab + [self.eos_token_id] for lab in labels]
+        labels = [[self.time_stamp_token_id] + lab + [self.eos_token_id] for lab in labels]
         # finally, pad the target labels to max_len
         label_lengths = [len(lab) for lab in labels]
         max_label_len = max(label_lengths)
@@ -479,12 +440,6 @@ def main():
     decoding_options = whisper.decoding.DecodingOptions(task="transcribe", language="en")
     task = whisper.decoding.DecodingTask(model, decoding_options)
     suppress_tokens = task._get_suppress_tokens()
-
-    logits_processors = [SuppressBlank(whisper_tok), SuppressTokens(suppress_tokens), ApplyTimestampRules(whisper_tok)]
-    
-    if model_args.no_logits_processor:
-        # disable logits processors
-        logits_processors = []
 
     tokenizer = whisper_tok.tokenizer
     tokenizer.pad_token = tokenizer.eos_token
@@ -820,6 +775,8 @@ def main():
     metric_wer = datasets.load_metric("wer")
     metric_cer = datasets.load_metric("cer")
 
+    normalizer = EnglishTextNormalizer()
+
     def compute_metrics(pred):
         pred_ids = pred.predictions
         pred.label_ids[pred.label_ids == -100] = tokenizer.eos_token_id
@@ -833,7 +790,13 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        return {"wer": wer, "cer": cer}
+        normalized_pred_str = [normalizer(input_str) for input_str in pred_str]
+        normalized_label_str = [normalizer(input_str) for input_str in label_str]
+
+        wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+        cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+
+        return {"wer": wer, "cer": cer, "wer_norm": wer_norm, "cer_norm": cer_norm}
 
     def compute_metrics_and_predictions(pred):
         pred_ids = pred.predictions
@@ -848,7 +811,13 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        return {"wer": wer, "cer": cer, "pred_str": pred_str, "label_str": label_str}
+        normalized_pred_str = [normalizer(input_str) for input_str in pred_str]
+        normalized_label_str = [normalizer(input_str) for input_str in label_str]
+
+        wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+        cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
+
+        return {"wer": wer, "cer": cer, "wer_norm": wer_norm, "cer_norm": cer_norm, "pred_str": pred_str, "label_str": label_str}
 
     class WhisperTrainer(Seq2SeqTrainer):
         def _save(self, output_dir: Optional[str] = None, state_dict=None):
@@ -863,7 +832,13 @@ def main():
             torch.save(self.args, os.path.join(output_dir, "training_args.bin"))
 
     # Define data collator
-    whisper_data_collator = WhisperDataCollatorWithPadding(eos_token_id=tokenizer.eos_token_id)
+    eos = tokenizer.eos_token_id
+    t_stamp = tokenizer("<|notimestamps|>").input_ids[0]
+    whisper_data_collator = WhisperDataCollatorWithPadding(eos_token_id=eos, time_stamp_token_id=t_stamp)
+
+    # make sure model uses 50257 as BOS
+    bos = tokenizer("<|startoftranscript|>").input_ids[0]
+    model.config.decoder_start_token_id = bos
 
     # Initialize Trainer
     trainer = WhisperTrainer(
@@ -915,7 +890,7 @@ def main():
             # manually init wandb
             wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         # Have to run this as a predict step, otherwise trainer will try to log the pred/label strings to wandb
-        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", logits_processor=logits_processors, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
+        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", forced_bos_token_id=t_stamp, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
         metrics = eval_results.metrics
         max_eval_samples = (
             data_args.max_eval_samples if data_args.max_eval_samples is not None else len(vectorized_datasets["eval"])
@@ -938,7 +913,7 @@ def main():
             wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         for split in test_split:
             predict_results = trainer.predict(
-                vectorized_datasets[split], metric_key_prefix=split, logits_processor=logits_processors, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
+                vectorized_datasets[split], metric_key_prefix=split, forced_bos_token_id=t_stamp, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
             metrics = predict_results.metrics
             max_predict_samples = (
                 data_args.max_predict_samples if data_args.max_predict_samples is not None else len(vectorized_datasets[split])
