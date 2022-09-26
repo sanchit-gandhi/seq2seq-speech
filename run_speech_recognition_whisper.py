@@ -385,7 +385,7 @@ def main():
     # load the model 
     if os.path.isfile(model_args.model_name_or_path):
         checkpoint = torch.load(model_args.model_name_or_path)
-        need_to_rewrite_checkpoint = any(k.startswith("decoder.blocks") and ".mlp.5" in k for k in Checkpoint.keys())
+        need_to_rewrite_checkpoint = any(k.startswith("decoder.blocks") and ".mlp.3" in k for k in checkpoint.keys())
         if need_to_rewrite_checkpoint:
             new_checkpoint = {}
             for k, v in checkpoint.items():
