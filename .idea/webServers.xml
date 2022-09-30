@@ -31,7 +31,7 @@
         </fileTransfer>
       </webServer>
       <webServer id="3e8cebd4-2667-4fc8-8df3-2e70467b2e2b" name="tpu-5">
-        <fileTransfer accessType="SFTP" host="35.204.243.233" port="22" sshConfigId="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" sshConfig="tpu-5" keyPair="true">
+        <fileTransfer accessType="SFTP" host="34.90.149.248" port="22" sshConfigId="931c8d74-1f88-4d47-b2f0-35d4c1cbb12f" sshConfig="tpu-5" keyPair="true">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
@@ -58,6 +58,27 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="3fb5d385-5f69-4d6e-9a9d-21e051492c57" name="sanchit-a100-2">
+        <fileTransfer accessType="SFTP" host="34.90.247.170" port="22" sshConfigId="2e8cde5a-43b5-4c20-b6aa-61724fe6fb61" sshConfig="sanchit-a100-2" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="4bbee96a-737c-40e4-9896-940936e719b0" name="sanchit-a100" url="http://localhost">
+        <fileTransfer accessType="SFTP" host="35.204.232.202" port="22" sshConfigId="46b86f56-e580-4409-b3d1-ae6c02fa95b5" sshConfig="sanchit-a100" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="6e5884d1-cb4a-4679-8481-2431f17a8543" name="esc-a100">
+        <fileTransfer accessType="SFTP" host="35.225.139.55" port="22" sshConfigId="19ef3c7f-fcf5-42de-b789-aa0ef8967f3e" sshConfig="esc-a100" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
     <groups>
       <group>
@@ -68,6 +89,14 @@
           <name value="tpu-3" />
           <name value="tpu-4" />
           <name value="tpu-5" />
+        </servers>
+      </group>
+      <group>
+        <name>GPUs</name>
+        <servers>
+          <name value="sanchit-a100-2" />
+          <name value="sanchit-a100" />
+          <name value="esc-a100" />
         </servers>
       </group>
     </groups>

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+CUDA_VISIBLE_DEVICES=1 python run_speech_recognition_whisper.py \
+	--model_name_or_path="medium.en" \
+  --dataset_name="ldc/switchboard" \
+  --dataset_config_name="all" \
+  --train_split_name="train.switchboard" \
+  --eval_split_name="validation.switchboard" \
+  --test_split_name="test.switchboard+test.callhome" \
+  --text_column_name="text" \
+	--max_steps="5000" \
+	--output_dir="./" \
+	--run_name="whisper-switchboard" \
+	--wandb_project="whisper" \
+	--per_device_train_batch_size="64" \
+	--per_device_eval_batch_size="16" \
+	--logging_steps="25" \
+	--learning_rate="1e-4" \
+	--warmup_steps="500" \
+	--report_to="wandb" \
+	--preprocessing_num_workers="16" \
+	--evaluation_strategy="steps" \
+	--eval_steps="1000" \
+	--save_strategy="steps" \
+	--save_steps="1000" \
+	--generation_max_length="224" \
+	--length_column_name="input_lengths" \
+	--do_lower_case="True" \
+	--push_to_hub="False" \
+	--gradient_checkpointing \
+	--group_by_length \
+	--freeze_encoder \
+	--fp16 \
+	--overwrite_output_dir \
+	--do_train \
+	--do_eval \
+	--do_predict \
+	--predict_with_generate \
+	--use_auth_token
