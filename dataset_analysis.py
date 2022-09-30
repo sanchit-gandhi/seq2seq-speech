@@ -3,6 +3,7 @@
 from datasets import load_dataset
 import os
 import datasets
+import torch
 import torchaudio.functional as F
 import numpy as np
 import pandas as pd
@@ -12,16 +13,18 @@ import struct
 
 import sys
 
-dataset_name, dataset_config, text_column = sys.argv[1:]
-# 1. python dataset_analysis.py "speech-seq2seq/ami" "ihm" "text"
-# 2. python dataset_analysis.py "librispeech_asr" "clean" "text"
-# 3. python dataset_analysis.py "librispeech_asr" "other" "text"
-# 4. python dataset_analysis.py "LIUM/tedlium" "release3" "text"
-# 5. python dataset_analysis.py "polinaeterna/voxpopuli" "en" "normalized_text"
-# 6. python dataset_analysis.py "kensho/spgispeech" "L" "transcript"
-# 7. python dataset_analysis.py "speechcolab/gigaspeech" "l" "text"
-# 8. python dataset_analysis.py "mozilla-foundation/common_voice_9_0" "en" "sentence"
-# 9. python dataset_analysis.py "speech-seq2seq/chime4-raw" "1-channel" "text"
+dataset_name, dataset_config, text_column, version = sys.argv[1:]
+# 1. python dataset_analysis.py "speech-seq2seq/ami" "ihm" "text" "v3"
+# 2. python dataset_analysis.py "librispeech_asr" "clean" "text" "v3"
+# 3. python dataset_analysis.py "librispeech_asr" "other" "text" "v3"
+# 4. python dataset_analysis.py "LIUM/tedlium" "release3" "text" "v3"
+# 5. python dataset_analysis.py "polinaeterna/voxpopuli" "en" "normalized_text" "v3"
+# 6. python dataset_analysis.py "kensho/spgispeech" "L" "transcript" "v3"
+# 7. python dataset_analysis.py "speechcolab/gigaspeech" "l" "text" "v3"
+# 8. python dataset_analysis.py "mozilla-foundation/common_voice_9_0" "en" "sentence" "v3"
+# 9. python dataset_analysis.py "speech-seq2seq/chime4-raw" "1-channel" "text" "v3"
+# 10. python dataset_analysis.py "sanchit-gandhi/earnings22_split" "all" "sentence" "v3"
+# 11. python dataset_analysis.py "ldc/switchboard" "all" "text" "v3"
 
 
 # Adapt
@@ -29,7 +32,7 @@ dataset_name, dataset_config, text_column = sys.argv[1:]
 use_auth_token = True
 dataset_cache_dir = "/home/patrick/.cache/huggingface/datasets"
 
-folder = f"{'_'.join(dataset_name.split('/'))}_{dataset_config}_stats_v3"
+folder = f"{'_'.join(dataset_name.split('/'))}_{dataset_config}_stats" + "_" + str(version)
 folder = os.path.join("/home/patrick/datasets_stats", folder)
 stats_file = folder + ".txt"
 
@@ -55,11 +58,6 @@ def separete_speech_non_speech(
     Returns:
         wave of all regions with no speech content, concatenated together
     """
-    # resample
-    if sr != webrtc_sr:
-        wav = librosa.core.resample(wav, sr, webrtc_sr)
-        wav = F.resample(wav, sr, webrtc_sr)
-
     # init VAD
     vad = webrtcvad.Vad(vad_aggressiveness)
 
@@ -289,23 +287,32 @@ def snr_map(batch):
     num_words = len(batch[text_column].split(" "))
     array = batch["audio"]["array"]
     sampling_rate = batch["audio"]["sampling_rate"]
+    # resample
+    if "ldc" not in dataset_name:
+        array = F.resample(torch.from_numpy(array), sampling_rate, 16_000).numpy()
 
     webrtc_window_ms = 30
     length_in_s = array.shape[-1] / sampling_rate
-    try:
-        bg_len = speech_len = 1
-#        vad, snr, bg_len, speech_len = mean_noise_power(array, sampling_rate, webrtc_window_ms)
+    bg_len = speech_len = 1
 
-#        is_speech_array = np.array(np.repeat(vad, webrtc_window_ms * sampling_rate // 1000), dtype=np.int8)
-#        speech_array = array[:is_speech_array.shape[-1]][is_speech_array == 1]
-#        snr = wada_snr(speech_array)
-#        OR
-        snr = wada_snr(array)
-        if snr == -20.0 or snr == 100.0:
+    try:
+        if version == "v1" or version == "v2":
+            vad, snr, bg_len, speech_len = mean_noise_power(array, sampling_rate, webrtc_window_ms)
+        elif version == "v3":
+            snr = wada_snr(array)
+        else:
+            raise ValueError("Bug!")
+
+        if version == "v2":
+            is_speech_array = np.array(np.repeat(vad, webrtc_window_ms * sampling_rate // 1000), dtype=np.int8)
+            speech_array = array[:is_speech_array.shape[-1]][is_speech_array == 1]
+            snr = wada_snr(speech_array)
+
+        if version in ["v2", "v3"] and (snr == -20.0 or snr == 100.0):
             snr = None
     except:
         snr = None
-        bg_len = speech_len = 0
+        bg_len = speech_len = length_in_s = 0
 
     batch["num_words"] = num_words
     batch["length_in_s"] = length_in_s
@@ -315,40 +322,50 @@ def snr_map(batch):
 
     return batch
 
+dataset = load_dataset(
+    dataset_name,
+    dataset_config,
+    use_auth_token=use_auth_token,
+    cache_dir=dataset_cache_dir,
+)
+
+if "common_voice" in dataset_name:
+    filtered_datasets = [v for k, v in dataset.items() if k in ("train", "validation", "test")]
+if "ldc" in dataset_name:
+    filtered_datasets = [v for k, v in dataset.items() if k != ("test.all")]
+else:
+    filtered_datasets = dataset.values()
+
+all_dataset = datasets.concatenate_datasets(filtered_datasets)
+
+length = {k: dataset[k].num_rows for k in dataset.keys()}
+cum_sum_length = {
+    k: np.cumsum(list(length.values()))[i] for i, k in enumerate(dataset.keys())
+}
 
 # remove `"False"` 
-if not os.path.exists(folder) or "gigaspeech" in dataset_name and False:
-    dataset = load_dataset(
-        dataset_name,
-        dataset_config,
-        use_auth_token=use_auth_token,
-        cache_dir=dataset_cache_dir,
+if not os.path.exists(folder):
+    out = all_dataset.map(
+        snr_map, batch_size=1, remove_columns=all_dataset.features.keys()
     )
-    all_dataset = datasets.concatenate_datasets(dataset.values())
-
-    length = {k: dataset[k].num_rows for k in dataset.keys()}
-    cum_sum_length = {
-        k: np.cumsum(list(length.values()))[i] for i, k in enumerate(dataset.keys())
-    }
-
-    if not os.path.exists(folder):
-        out = all_dataset.map(
-            snr_map, batch_size=1, remove_columns=all_dataset.features.keys()
-        )
-        out.save_to_disk(folder)
-    else:
-        out = datasets.load_from_disk(folder)
-
-    sources = all_dataset["source"]
-    source_kinds = list(set(sources))
-    sources = np.asarray(sources, np.int32)
+    out.save_to_disk(folder)
 else:
-    sources = None
     out = datasets.load_from_disk(folder)
-    cum_sum_length = None
+
+#if not os.path.exists(folder) or "gigaspeech" in dataset_name and False:
+#    if "gigaspeech" in dataset_name:
+#    sources = all_dataset["source"]
+#    source_kinds = list(set(sources))
+#    sources = np.asarray(sources, np.int32)
+#else:
+#    sources = None
+#    out = datasets.load_from_disk(folder)
+#    cum_sum_length = None
 
 
+sources = None
 results = {}
+results["length"] = length
 # SNR
 snrs = np.array(out["snr"], dtype=np.float32)
 
@@ -393,7 +410,7 @@ results["speech_to_silence"] = round(
 
 # Text
 results["mean_words"] = round(np.mean(out["num_words"]), 2)
-# results["num_samples"] = length
+#results["num_samples"] = length
 
 
 result_str = json.dumps(results, indent=2, sort_keys=True) + "\n"
