@@ -32,7 +32,7 @@ home_path = "/home/patrick"
 dir_path = f"{home_path}/ngrams/{dataset_name.split('/')[-1]}"
 text_save_path = f"{dir_path}/text.txt"
 ngram_save_path = f"{dir_path}/{file_name}"
-dataset_cache_dir = "/home/patrick/.cache/huggingface/datasets"
+dataset_cache_dir = f"{home_path}.cache/huggingface/datasets"
 
 # error corrections
 tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
@@ -40,7 +40,7 @@ gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": 
 gigaspeech_disfluencies = ["<other>", "<sil>"]
 swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-", "[vocalized-noise]", "_1"]
 swb_punctuations = ["{", "}", "[", "]-", "]"]
-earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
+earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>", "<silence>"]
 ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
 
@@ -218,7 +218,7 @@ if not os.path.isfile(text_save_path):
         file.write(" ".join(text_data[text_column]))
 
 if not os.path.isfile(ngram_save_path):
-    ngram_command = f"/home/patrick/kenlm/build/bin/lmplz -o 5 < '{text_save_path}' > '{ngram_save_path}' --skip_symbols"
+    ngram_command = f"{home_path}/kenlm/build/bin/lmplz -o 5 < '{text_save_path}' > '{ngram_save_path}' --skip_symbols"
     os.system(ngram_command)
 
     # correct with "</s>"
