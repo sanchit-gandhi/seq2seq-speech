@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-CUDA_VISIBLE_DEVICES=6 python run_speech_recognition_whisper.py \
-	--model_name_or_path="medium.en" \
-	--dataset_name="hf-internal-testing/librispeech_asr_dummy" \
+CUDA_VISIBLE_DEVICES="" python run_speech_recognition_whisper.py \
+	--model_name_or_path="tiny.en" \
+	--dataset_name="patrickvonplaten/librispeech_asr_dummy" \
 	--num_train_epochs="2" \
 	--evaluation_strategy="epoch" \
 	--dataset_config_name="clean" \
+	--dataset_cache_dir="/home/patrick_huggingface_co/hey" \
 	--train_split_name="validation[:32]" \
 	--eval_split_name="validation" \
 	--test_split_name="validation[:90%]" \
