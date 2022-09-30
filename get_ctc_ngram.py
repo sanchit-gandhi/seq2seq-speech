@@ -8,14 +8,13 @@ from transformers import AutoProcessor
 from pathlib import Path
 from pyctcdecode import build_ctcdecoder
 
-
 # adapt to dataset
-dataset_name = "speech-seq2seq/ami"
-dataset_config = "ihm"
+dataset_name = "polinaeterna/voxpopuli"
+dataset_config = "en"
 split = "train"
-text_column = "text"
-tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-ami-black-box"
-do_lower = False # only set to TRUE if dataset is NOT cased
+text_column = "normalized_text"
+tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-voxpopuli-black-box"
+do_lower = True  # only set to TRUE if dataset is NOT cased
 
 # should be kept the same across datasets (except for ablation)
 cutoff_freq = 0.01
@@ -33,7 +32,7 @@ home_path = "/home/patrick"
 dir_path = f"{home_path}/ngrams/{dataset_name.split('/')[-1]}"
 text_save_path = f"{dir_path}/text.txt"
 ngram_save_path = f"{dir_path}/{file_name}"
-dataset_cache_dir = "/home/patrick/.cache/huggingface/datasets"
+dataset_cache_dir = f"{home_path}.cache/huggingface/datasets"
 
 # error corrections
 tedlium_contractions = [" 's", " 't", " 're", " 've", " 'm", " 'll", " 'd", " 'clock", " 'all"]
@@ -41,7 +40,7 @@ gigaspeech_punctuation = {" <comma>": ",", " <period>": ".", " <questionmark>": 
 gigaspeech_disfluencies = ["<other>", "<sil>"]
 swb_disfluencies = ["[noise]", "[laughter]", "[silence]", "<a_aside>", "<b_aside>", "<e_aside>", "[laughter-", "[vocalized-noise]", "_1"]
 swb_punctuations = ["{", "}", "[", "]-", "]"]
-earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>"]
+earnings_disfluencies = ["<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<unk>", "<silence>"]
 ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]", "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", "<other>", "<sil>", ""]
 
 
@@ -218,10 +217,8 @@ if not os.path.isfile(text_save_path):
     with open(text_save_path, "w") as file:
         file.write(" ".join(text_data[text_column]))
 
-import ipdb; ipdb.set_trace()
-
 if not os.path.isfile(ngram_save_path):
-    ngram_command = f"/home/patrick/kenlm/build/bin/lmplz -o 5 < '{text_save_path}' > '{ngram_save_path}' --skip_symbols"
+    ngram_command = f"{home_path}/kenlm/build/bin/lmplz -o 5 < '{text_save_path}' > '{ngram_save_path}' --skip_symbols"
     os.system(ngram_command)
 
     # correct with "</s>"
@@ -306,7 +303,51 @@ os.system(f"mv '{bin_save_path}' '{new_ngram_path}'")
 # => REMOVED CHARS: ['X', 'Q', 'Z', '0', '!', '*', '1', '3', '@']
 
 # ========================================================================
-# 4. Earnings 22:
+# 4. CV 9
+#    dataset_name = "mozilla-foundation/common_voice_9_0"
+#    dataset_config = "en"
+#    split = "train"
+#    text_column = "sentence"
+#    tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-cv9-black-box"
+#    do_lower = False  # only set to TRUE if dataset is NOT cased
+
+# => REMOVED CHARS: REMOVED CHARS: [':', '’', 'Z', 'Q', ';', 'X', '”', '“', '‘', '—', 'é', 'ü', ')', '(', 'ä', 'ö', 'á', 'ó', 'è', 'í', '–', '/', 'ç', '&', 'â', 'ō', 'ß', 'ñ', 'É', 'à', 'ï', 'ô', 'ú', 'ã', 'ê', 'ë', 'č', 'ł', '`', 'Ö', '…', '´', 'ø', 'ć', 'Š', 'ž', 'Ü', 'î', 'ð', 'û', 'ā', 'ă', 'ū', '%', 'Ä', 'ı', 'œ', 'š', '[', ']', '«', '»', 'Á', 'Ó', 'ò', 'ī', 'ș', '_', '¡', '·', 'Ç', 'Ú', 'æ', 'ý', 'ń', 'Ō', 'Œ', 'ř', 'ş', 'ʻ', 'α', 'κ', 'π', 'и', 'к', 'ạ', '#', '=', '~', '§', 'Ã', 'È', 'Î', 'Ø', 'å', 'õ', 'þ', 'Č', 'ē', 'ę', 'ě', 'ğ', 'ň', 'ő', 'Ș', 'ə', 'Α', 'Χ', 'В', 'а', 'е', 'з', 'й', 'л', 'н', 'ь', 'я', 'נ', 'ע', 'ṃ', 'ả', 'ị', 'ụ', '„', '€', '→', '≡', '京', '先', '大', '尚', '时', '生', '都', '阪', 'ﬂ']
+
+# ========================================================================
+# 5. Gigaspeech
+#    dataset_name = "speechcolab/gigaspeech"
+#    dataset_config = "l"
+#    split = "train"
+#    text_column = "text"
+#    tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-gs-black-box"
+#    do_lower = True  # only set to TRUE if dataset is NOT cased
+
+# => REMOVED CHARS: []
+
+# ========================================================================
+# 6. SPGI Kensho Speech
+#    dataset_name = "kensho/spgispeech"
+#    dataset_config = "L"
+#    split = "train"
+#    text_column = "transcript"
+#    tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-spgispeech-black-box"
+#    do_lower = False # only set to TRUE if dataset is NOT cased
+
+# => REMOVED CHARS: ['Q', 'V', 'U', 'K', '9', 'X', 'Z']
+
+# ========================================================================
+# 7. VoxPopuli
+#    dataset_name = "polinaeterna/voxpopuli"
+#    dataset_config = "en"
+#    split = "train"
+#    text_column = "normalized_text"
+#    tokenizer_name = "sanchit-gandhi/flax-wav2vec2-ctc-voxpopuli-black-box"
+#    do_lower = True  # only set to TRUE if dataset is NOT cased
+
+# => REMOVED CHARS: ['!', '1']
+
+# ========================================================================
+# 8. Earnings 22:
 #    dataset_name = "sanchit-gandhi/earnings22_robust_split"
 #    dataset_config = None
 #    split = "train"

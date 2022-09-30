@@ -14,4 +14,5 @@ python ./run_flax_speech_recognition_ctc_ngram.py \
 	--do_eval \
 	--do_predict \
 	--overwrite_output_dir \
-	--use_auth_token
+	--use_auth_token \
+	--do_lower_case
