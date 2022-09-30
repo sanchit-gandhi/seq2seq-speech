@@ -21,7 +21,6 @@ Fine-tuning OpenAI Whisper models for speech recognition.
 import logging
 import os
 import re
-import string
 
 import torchaudio
 import whisper
@@ -48,8 +47,6 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import wandb
-
-from whisper.normalizers.english import EnglishTextNormalizer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.17.0.dev0")
@@ -230,12 +227,6 @@ class DataTrainingArguments:
         default="speech-recognition-whisper",
         metadata={"help": "The name of the wandb project."},
     )
-    ignore_verifications: bool = field(
-        default=False,
-        metadata={
-            "help": "Ignore the verifications of the downloaded/processed dataset information in `load_dataset` (checksums/size/splits/...)."
-        }
-    )
     torchaudio_resampler: bool = field(
         default=False,
         metadata={
@@ -312,7 +303,7 @@ class WhisperDataCollatorWithPadding:
         input_ids = torch.concat([to_pad_to_mel(input_val)[None, :] for input_val in input_ids])
 
         # next, append the eos token to our sequence of labels
-        labels = [[self.time_stamp_token_id] + lab + [self.eos_token_id] for lab in labels]
+        labels = [lab + [self.eos_token_id] for lab in labels]
         # finally, pad the target labels to max_len
         label_lengths = [len(lab) for lab in labels]
         max_label_len = max(label_lengths)
@@ -387,27 +378,27 @@ def main():
     else:
         model = whisper.load_model(model_args.model_name_or_path, dropout_rate=model_args.dropout_rate)
 
-    # set the dropout for the MLP layers -> we do this here as the MLP layers are written as a 'sequential'
-    # so changing the modelling code gives mis-matches in the state-dict
+    if training_args.do_train:
+        # set the dropout for the MLP layers -> we do this here as the MLP layers are written as a 'sequential'
+        # so changing the modelling code gives mis-matches in the state-dict
+        if not model_args.freeze_encoder:
+            # only apply dropout when training the encoder
+            for block_idx in range(len(model.encoder.blocks)):
+                mlp_layer = model.encoder.blocks[block_idx].mlp
+                # going very verbose to explain what we're doing here!
+                fc1 = mlp_layer[0]
+                act_fn = mlp_layer[1]
+                dropout = nn.Dropout(p=model_args.dropout_rate)
+                fc2 = mlp_layer[2]
+                model.encoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
 
-    if not model_args.freeze_encoder:
-        # only apply dropout when training the encoder
-        for block_idx in range(len(model.encoder.blocks)):
-            mlp_layer = model.encoder.blocks[block_idx].mlp
-            # going very verbose to explain what we're doing here!
+        for block_idx in range(len(model.decoder.blocks)):
+            mlp_layer = model.decoder.blocks[block_idx].mlp
             fc1 = mlp_layer[0]
             act_fn = mlp_layer[1]
             dropout = nn.Dropout(p=model_args.dropout_rate)
             fc2 = mlp_layer[2]
-            model.encoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
-
-    for block_idx in range(len(model.decoder.blocks)):
-        mlp_layer = model.decoder.blocks[block_idx].mlp
-        fc1 = mlp_layer[0]
-        act_fn = mlp_layer[1]
-        dropout = nn.Dropout(p=model_args.dropout_rate)
-        fc2 = mlp_layer[2]
-        model.decoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
+            model.decoder.blocks[block_idx].mlp = nn.Sequential(fc1, act_fn, dropout, fc2, dropout)
 
     # load the tokenizer
     whisper_tok = whisper.tokenizer.get_tokenizer(False, task="transcribe", language="en")
@@ -740,12 +731,8 @@ def main():
         logging.info("Model encoder has been frozen")
 
     # 8. Load Metric
-    #metric_wer = evaluate.load("wer")
-    #metric_cer = evaluate.load("cer")
     metric_wer = datasets.load_metric("wer")
     metric_cer = datasets.load_metric("cer")
-
-    normalizer = EnglishTextNormalizer()
 
     def compute_metrics(pred):
         pred_ids = pred.predictions
@@ -760,13 +747,7 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        normalized_pred_str = [normalizer(str(input_str)) for input_str in pred_str]
-        normalized_label_str = [normalizer(str(input_str)) for input_str in label_str]
-
-        wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
-        cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
-
-        return {"wer": wer, "cer": cer, "wer_norm": wer_norm, "cer_norm": cer_norm}
+        return {"wer": wer, "cer": cer}
 
     def compute_metrics_and_predictions(pred):
         pred_ids = pred.predictions
@@ -781,13 +762,7 @@ def main():
         wer = metric_wer.compute(predictions=pred_str, references=label_str)
         cer = metric_cer.compute(predictions=pred_str, references=label_str)
 
-        normalized_pred_str = [normalizer(str(input_str)) for input_str in pred_str]
-        normalized_label_str = [normalizer(str(input_str)) for input_str in label_str]
-
-        wer_norm = metric_wer.compute(predictions=normalized_pred_str, references=normalized_label_str)
-        cer_norm = metric_cer.compute(predictions=normalized_pred_str, references=normalized_label_str)
-
-        return {"wer": wer, "cer": cer, "wer_norm": wer_norm, "cer_norm": cer_norm, "pred_str": pred_str, "label_str": label_str}
+        return {"wer": wer, "cer": cer, "pred_str": pred_str, "label_str": label_str}
 
     class WhisperTrainer(Seq2SeqTrainer):
         def _save(self, output_dir: Optional[str] = None, state_dict=None):
@@ -860,7 +835,7 @@ def main():
             # manually init wandb
             wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         # Have to run this as a predict step, otherwise trainer will try to log the pred/label strings to wandb
-        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", forced_bos_token_id=t_stamp, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
+        eval_results = trainer.predict(vectorized_datasets["eval"], metric_key_prefix="eval", num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
         metrics = eval_results.metrics
         max_eval_samples = (
             data_args.max_eval_samples if data_args.max_eval_samples is not None else len(vectorized_datasets["eval"])
@@ -883,7 +858,7 @@ def main():
             wandb.init(project=data_args.wandb_project, name=training_args.run_name)
         for split in test_split:
             predict_results = trainer.predict(
-                vectorized_datasets[split], metric_key_prefix=split, forced_bos_token_id=t_stamp, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
+                vectorized_datasets[split], metric_key_prefix=split, num_beams=model_args.num_beams, length_penalty=model_args.length_penalty)
             metrics = predict_results.metrics
             max_predict_samples = (
                 data_args.max_predict_samples if data_args.max_predict_samples is not None else len(vectorized_datasets[split])
