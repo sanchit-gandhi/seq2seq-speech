@@ -520,6 +520,7 @@ def main():
                         "[laughter-", "_1", "[laugh]", "[sigh]", "[cough]", "[mn]", "[breath]", "[lipsmack]",
                         "[sneeze]", "[skip]", "[pause]", "(%hesitation)", "(%HESITATION)"]
     swb_punctuations = ["{", "}", "[", "]-", "]", "((", "))", "(", ")"]
+    swb_fillers = r"\b(uh|uhm|um|hmm|mm|mhm|mmm)\b"
     earnings_disfluencies = ["<noise>", "<crosstalk>", "<affirmative>", "<inaudible>", "inaudible", "<laugh>", "<silence>"]
     ignore_segments = ["ignore_time_segment_in_scoring", "<noise>", "<music>", "[noise]", "[laughter]", "[silence]",
                        "[vocalized-noise]", "<crosstalk>", "<affirmative>", "<inaudible>", "<laugh>", ""]
@@ -615,8 +616,7 @@ def main():
                 input_str = input_str.replace(disfluency, "")
 
             # normalise acronyms (Fisher: u_.c_.l_.a., SWBD: u c l a)
-            input_str = input_str.replace("_.", " ")
-
+            input_str = input_str.replace("_.", " ").replace(".", "")
             # Replace partially pronounced words (square brackets + hyphen): westmin[ster]- to westmin- or -[go]ing to -ing
             # Replace anomalous words (square brackets + backslack): [lemguini/linguini] to linguini
             # Replace the combo of the two: [lem[guini]-/linguini] to lem-
@@ -659,6 +659,9 @@ def main():
             # remove erroneous punctuations (curly braces, trailing square brackets, etc.)
             for punctuation in swb_punctuations:
                 input_str = input_str.replace(punctuation, "")
+
+            # Remove fillers from the train set not present in the test set
+            input_str = re.sub(swb_fillers, "", input_str)
 
         # Earnings 22: still figuring out best segmenting method. Thus, dataset name subject to change
         if "earnings22" in dataset_name:
