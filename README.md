@@ -41,7 +41,7 @@ tokenizer.save_pretrained("./")
 
 To train the model on [Librispeech ASR](https://huggingface.co/datasets/librispeech_asr), run the template bash script [`run_seq2seq_dummy.sh`](https://github.com/sanchit-gandhi/seq2seq-speech/blob/main/run_seq2seq_dummy.sh).
 
-## Whisper Model
+## Flax Whisper Model
 
 ```bash
 #!/usr/bin/env bash
@@ -54,10 +54,9 @@ python run_flax_speech_recognition_seq2seq.py \
         --test_split_name="test" \
         --text_column_name="text" \
         --id_column_name="id" \
-        --output_dir="./" \
+        --output_dir="./flax-whisper-ft-librispeech-clean" \
         --wandb_project="librispeech_clean" \
         --wandb_name="flax-whisper-ft-librispeech-clean" \
-        --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
         --per_device_train_batch_size="8" \
         --per_device_eval_batch_size="2" \
         --learning_rate="1e-4" \
@@ -83,3 +82,8 @@ python run_flax_speech_recognition_seq2seq.py \
         --push_to_hub \
         --use_auth_token
 ```
+
+Control the precision through the `--precision` arg:
+* Full precision (weights and optimiser in fp32): `--precision=full`
+* Half-mixed (weights in bf16, optimiser in fp32 ): `--precision=half_mixed`
+* Full-mixed (weights and optimiser in bf16): `--precision=full_mixed`
