@@ -41,7 +41,6 @@ from flax import core, jax_utils, struct, traverse_util
 from flax.jax_utils import pad_shard_unpad, unreplicate
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from huggingface_hub import Repository
-from models import FlaxSpeechEncoderDecoderModel
 from optax._src import linear_algebra
 from transformers import (
     AutoConfig,
@@ -51,6 +50,7 @@ from transformers import (
     HfArgumentParser,
     Seq2SeqTrainingArguments,
     is_tensorboard_available,
+    WhisperForConditionalGeneration,
 )
 from transformers.file_utils import get_full_repo_name
 from transformers.trainer_utils import get_last_checkpoint
@@ -59,7 +59,7 @@ from transformers.utils.versions import require_version
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.17.0.dev0")
+check_min_version("4.18.0.dev0")
 
 require_version("datasets>=1.18.0", "To fix: pip install -r examples/pytorch/speech-recognition/requirements.txt")
 
@@ -281,6 +281,23 @@ class DataTrainingArguments:
             "help": "Whether to log the first id's from the dataset. Defaults to `True`. If `False`, will log the first id's returned by the grouped length sampler."
         },
     )
+    do_lower_case: bool = field(
+        default=False,
+        metadata={"help": "Whether the target text should be lower cased."},
+    )
+    language: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "Language for multilingual fine-tuning. This argument should be set for multilingual fine-tuning "
+                "only. For English speech recognition, it should be set to `None`."
+            )
+        },
+    )
+    task: str = field(
+        default="transcribe",
+        metadata={"help": "Task, either `transcribe` for speech recognition or `translate` for speech translation."},
+    )
 
 
 # @flax.struct.dataclass
@@ -499,7 +516,7 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
     def __call__(self, features: List[Dict[str, Union[List[int], np.ndarray]]]) -> Dict[str, np.ndarray]:
         # split inputs and labels since they have to be of different lengths and need
         # different padding methods
-        input_features = [{"input_values": feature["input_values"]} for feature in features]
+        input_features = [{"input_features": feature["input_features"]} for feature in features]
         input_ids = [feature["input_id"] for feature in features]
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
@@ -533,7 +550,7 @@ class FlaxDataCollatorSpeechSeq2SeqWithPadding:
         labels = np.ma.array(labels, mask=np.not_equal(labels_batch.attention_mask, 1))
         labels = labels.filled(fill_value=-100)
 
-        batch["inputs"] = batch.pop("input_values")
+        batch["inputs"] = batch.pop("input_features")
         batch["input_ids"] = input_ids
         batch["labels"] = labels
         batch["decoder_input_ids"] = decoder_input_ids
@@ -848,7 +865,7 @@ def main():
         dtype = jnp.float32
         training_args.mixed_precision = False
 
-    model = FlaxSpeechEncoderDecoderModel.from_pretrained(
+    model = WhisperForConditionalGeneration.from_pretrained(
         model_args.model_name_or_path,
         config=config,
         dtype=dtype,
@@ -878,6 +895,12 @@ def main():
     id_column_name = data_args.id_column_name
     model_input_name = feature_extractor.model_input_names[0]
     log_first_ids = data_args.log_first_ids
+    do_lower_case = data_args.do_lower_case
+
+    # Configure the tokenizer prefix tokens
+    if data_args.language is not None:
+        # We only need to set the task id when the language is specified (i.e. in a multilingual setting)
+        tokenizer.set_prefix_tokens(language=data_args.language, task=data_args.task)
 
     if training_args.do_train and data_args.max_train_samples is not None:
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -891,20 +914,17 @@ def main():
 
 
     def prepare_dataset(batch):
-        # Pre-process audio
+        # process audio
         sample = batch[audio_column_name]
-
-        # normalise audio (mean, std) to (0, 1)
         inputs = feature_extractor(sample["array"], sampling_rate=sample["sampling_rate"])
         # process audio length
-        batch[model_input_name] = inputs.input_values[0]
-        batch["input_length"] = len(batch["input_values"])
+        batch[model_input_name] = inputs.get(model_input_name)[0]
+        batch["input_length"] = len(sample["array"])
         batch["input_id"] = batch[id_column_name] if log_first_ids else None
 
-        input_str = batch[text_column_name]
-        # Finally, we tokenize the processed text
+        # process targets
+        input_str = batch[text_column_name].lower() if do_lower_case else batch[text_column_name]
         batch["labels"] = tokenizer(input_str).input_ids
-        batch["labels_length"] = len(batch["labels"])
         return batch
 
     vectorized_datasets = raw_datasets.map(
@@ -1190,25 +1210,7 @@ def main():
             dropout_rng=new_dropout_rng,
             to_dtype=to_dtype,
         )
-
-        # compute gradient norms over all layers, total encoder, total decoder and global for detailed monitoring
-        layer_grad_norm = jax.tree_map(jnp.linalg.norm, grad)
-        logs = {
-            "layer_grad_norm": layer_grad_norm,
-            "encoder_grad_norm": jnp.linalg.norm(jax.tree_util.tree_leaves(layer_grad_norm["encoder"])),
-            "decoder_grad_norm": jnp.linalg.norm(jax.tree_util.tree_leaves(layer_grad_norm["decoder"])),
-        }
-        logs["grad_norm"] = jnp.linalg.norm([logs["encoder_grad_norm"], logs["decoder_grad_norm"]])
-
-        # compute parameter norms over all layers, total encoder, total decoder and global for detailed monitoring
-        layer_param_norm = jax.tree_map(jnp.linalg.norm, new_state.params)
-        logs["layer_param_norm"] = layer_param_norm
-        logs["encoder_param_norm"] = jnp.linalg.norm(jax.tree_util.tree_leaves(layer_param_norm["encoder"]))
-        logs["decoder_param_norm"] = jnp.linalg.norm(jax.tree_util.tree_leaves(layer_param_norm["decoder"]))
-        logs["param_norm"] = jnp.linalg.norm([logs["encoder_param_norm"], logs["decoder_param_norm"]])
-
         metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
-        metrics.update(logs)
 
         metrics = jax.lax.pmean(metrics, axis_name="batch")
         # metrics = to_fp32(metrics)
@@ -1395,7 +1397,7 @@ def main():
                     # write_train_metric(summary_writer, train_metrics, train_time, cur_step)
 
                     epochs.write(
-                        f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']}, Gradient Norm: {train_metric['grad_norm']})"
+                        f"Step... ({cur_step} | Loss: {train_metric['loss']}, Learning Rate: {train_metric['learning_rate']})"
                     )
 
                 if cur_step % total_train_steps == 0:
