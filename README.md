@@ -40,3 +40,46 @@ tokenizer.save_pretrained("./")
 ```
 
 To train the model on [Librispeech ASR](https://huggingface.co/datasets/librispeech_asr), run the template bash script [`run_seq2seq_dummy.sh`](https://github.com/sanchit-gandhi/seq2seq-speech/blob/main/run_seq2seq_dummy.sh).
+
+## Whisper Model
+
+```bash
+#!/usr/bin/env bash
+python run_flax_speech_recognition_seq2seq.py \
+        --dataset_name="librispeech_asr" \
+        --model_name_or_path="openai/whisper-small" \
+        --dataset_config_name="clean" \
+        --train_split_name="train.100" \
+        --eval_split_name="validation" \
+        --test_split_name="test" \
+        --text_column_name="text" \
+        --id_column_name="id" \
+        --output_dir="./" \
+        --wandb_project="librispeech_clean" \
+        --wandb_name="flax-whisper-ft-librispeech-clean" \
+        --dataset_cache_dir="/home/sanchitgandhi/cache/huggingface/datasets" \
+        --per_device_train_batch_size="8" \
+        --per_device_eval_batch_size="2" \
+        --learning_rate="1e-4" \
+        --warmup_steps="500" \
+        --logging_steps="25" \
+        --max_steps="50000" \
+        --eval_steps="10000" \
+        --save_steps="10000" \
+        --generation_max_length="200" \
+        --generation_num_beams="5" \
+        --generation_length_penalty="1.2" \
+        --hidden_dropout="0.2" \
+        --activation_dropout="0.2" \
+        --feat_proj_dropout="0.2" \
+        --overwrite_output_dir \
+        --gradient_checkpointing \
+        --freeze_feature_encoder \
+        --predict_with_generate \
+        --do_lower_case \
+        --do_eval \
+        --do_train \
+        --do_predict \
+        --push_to_hub \
+        --use_auth_token
+```

@@ -1358,9 +1358,6 @@ def main():
     logger.info(f"  Num gradient accumulation steps = {gradient_accumulation_steps}")
     logger.info(f"  Total train batch size (w. parallel & distributed) = {batch_size_per_update}")
     logger.info(f"  Total optimization steps = {total_train_steps}")
-    logger.info(f"  Gradient checkpointing: {config.encoder.gradient_checkpointing}")
-    logger.info(f"  Use scan: {config.encoder.use_scan}")
-    logger.info(f"  Fuse matmuls: {config.encoder.fuse_matmuls}")
 
     train_time = cur_step = 0
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
